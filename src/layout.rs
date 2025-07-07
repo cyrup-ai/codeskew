@@ -39,6 +39,48 @@ impl LayoutEngine {
             config: config.clone(),
         }
     }
+    
+    /// Calculate the base font size for given content
+    pub fn calculate_base_font_size(&self, highlighted_code: &[StyledLine]) -> f32 {
+        // Count non-empty lines so we can size according to height.
+        let non_empty_lines: Vec<&StyledLine> = highlighted_code
+            .iter()
+            .filter(|line| {
+                !line.spans.is_empty() && line.spans.iter().any(|span| !span.text.trim().is_empty())
+            })
+            .collect();
+
+        let line_count = non_empty_lines.len().max(1);
+
+        // Find the longest line (in raw character count) so we can size according to width.
+        let longest_line_chars = highlighted_code
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.text.len()).sum::<usize>())
+            .max()
+            .unwrap_or(0) as f32;
+
+        let char_width_ratio = 0.7;
+
+        // Font size constrained by available *height* (leave ~20 % top/bottom)
+        let font_by_height = (self.config.height as f32 * 0.8) / (line_count as f32 * 1.4);
+
+        // Font size constrained by available *width* (leave ~10 % margin)
+        let font_by_width = if longest_line_chars > 0.0 {
+            (self.config.width as f32 * 0.9) / (longest_line_chars * char_width_ratio)
+        } else {
+            font_by_height
+        };
+
+        // Use the tighter constraint so we satisfy both axes.
+        let mut base_font_size = font_by_height.min(font_by_width);
+
+        // Keep font size within sane limits
+        base_font_size = base_font_size
+            .max(8.0) // readability
+            .min(self.config.fontsize * 10.0);
+            
+        base_font_size
+    }
 
     /// Layout the highlighted code
     pub fn layout(
@@ -183,50 +225,19 @@ impl LayoutEngine {
         // well and pick the smaller of the two resulting font sizes.
         // ------------------------------------------------------------------
 
-        // 1. Count non-empty lines so we can size according to height.
-        let non_empty_lines: Vec<&StyledLine> = highlighted_code
+        // Calculate base font size using helper function
+        let base_font_size = self.calculate_base_font_size(highlighted_code);
+        
+        // Count lines for layout calculations
+        let line_count = highlighted_code
             .iter()
             .filter(|line| {
                 !line.spans.is_empty() && line.spans.iter().any(|span| !span.text.trim().is_empty())
             })
-            .collect();
-
-        let line_count = non_empty_lines.len().max(1);
+            .count()
+            .max(1);
+        
         println!("Standard layout: {line_count} lines");
-
-        // 2. Find the longest line (in raw character count) so we can size
-        //    according to width.
-        let longest_line_chars = highlighted_code
-            .iter()
-            .map(|line| line.spans.iter().map(|s| s.text.len()).sum::<usize>())
-            .max()
-            .unwrap_or(0) as f32;
-
-        // Monospaced fonts are not strictly uniform when rendered with
-        // sub-pixel positioning but 0.7×fontsize is a fair approximation for
-        // the advance width.  We reuse the same ratio here so both axes agree.
-        let char_width_ratio = 0.7;
-
-        // Font size constrained by available *height* (leave ~20 % top/bottom)
-        let font_by_height = (self.config.height as f32 * 0.8) / (line_count as f32 * 1.4);
-
-        // Font size constrained by available *width* (leave ~10 % margin)
-        let font_by_width = if longest_line_chars > 0.0 {
-            (self.config.width as f32 * 0.9) / (longest_line_chars * char_width_ratio)
-        } else {
-            // Fallback so we never divide by zero
-            font_by_height
-        };
-
-        // Use the tighter constraint so we satisfy both axes.
-        let mut base_font_size = font_by_height.min(font_by_width);
-
-        // Keep font size within sane limits (user-supplied --fontsize acts as
-        // an upper bound so callers can still force tiny text if they want).
-        base_font_size = base_font_size
-            .max(8.0) // readability
-            .min(self.config.fontsize * 10.0);
-
         println!("Chosen font size: {base_font_size:.2}");
 
         // Metric helpers

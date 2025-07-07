@@ -531,12 +531,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
                 Ok(())
             }
             "zeroshot" | "zeroshot_original" => {
-                // For zeroshot, we need a noise/dust texture
-                let noise_url = "https://cdn.jsdelivr.net/gh/mrdoob/three.js@dev/examples/textures/cloud.png";
-                let texture_data = self.download_texture(noise_url).await?;
-                toy_renderer.load_channel(0, &texture_data)
+                // For zeroshot, generate a procedural noise texture directly
+                toy_renderer.load_procedural_texture(0, 512, 512)
                     .map_err(|e| CodeSkewError::RenderingError(format!("Failed to load zeroshot texture: {}", e)))?;
-                println!("🔧 DEBUG: Loaded default cloud texture for zeroshot shader");
+                println!("🔧 DEBUG: Generated procedural texture for zeroshot shader");
                 Ok(())
             }
             _ => {

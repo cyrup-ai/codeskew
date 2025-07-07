@@ -22,11 +22,11 @@ pub struct TextAreaData {
 
 impl TextRenderState {
     #[inline]
-    pub fn new(capacity: usize, font_system: &mut FontSystem, width: u32, height: u32, supersampling_factor: f32) -> Self {
+    pub fn new(capacity: usize, font_system: &mut FontSystem, width: u32, height: u32, supersampling_factor: f32, base_font_size: f32) -> Self {
         let mut buffers = Vec::with_capacity(capacity);
-        // Scale font metrics by supersampling factor
-        let font_size = 20.0 * supersampling_factor;
-        let line_height = 24.0 * supersampling_factor;
+        // Use base font size from config for buffer metrics
+        let font_size = base_font_size;
+        let line_height = base_font_size * 1.4; // Same ratio as layout.rs
         let buffer_width = width as f32;
         let buffer_height = height as f32;
         
@@ -67,15 +67,15 @@ impl TextRenderState {
     }
 
     #[inline]
-    pub fn ensure_capacity(&mut self, required: usize, font_system: &mut FontSystem, width: u32, height: u32, supersampling_factor: f32) {
+    pub fn ensure_capacity(&mut self, required: usize, font_system: &mut FontSystem, width: u32, height: u32, supersampling_factor: f32, base_font_size: f32) {
         if required > self.buffers.len() {
             self.buffers.reserve(required - self.buffers.len());
             self.strings.reserve(required - self.strings.len());
             self.areas_data.reserve(required - self.areas_data.len());
             
-            // Scale font metrics by supersampling factor
-            let font_size = 20.0 * supersampling_factor;
-            let line_height = 24.0 * supersampling_factor;
+            // Use base font size from config for buffer metrics
+            let font_size = base_font_size;
+            let line_height = base_font_size * 1.4; // Same ratio as layout.rs
             let buffer_width = width as f32;
             let buffer_height = height as f32;
 

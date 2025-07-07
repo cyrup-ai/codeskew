@@ -12,7 +12,7 @@ impl EliteWebGPURenderer {
     pub fn render(
         &mut self,
         layout: &[PositionedLine],
-        _config: &Config,
+        config: &Config,
     ) -> Result<Vec<u8>, CodeSkewError> {
         // Update time
         let now = std::time::Instant::now();
@@ -33,7 +33,7 @@ impl EliteWebGPURenderer {
         );
 
         // Prepare text areas
-        self.prepare_text_areas(layout)?;
+        self.prepare_text_areas(layout, config)?;
 
         // Render composite
         self.render_composite_internal(layout)?;
@@ -48,7 +48,7 @@ impl EliteWebGPURenderer {
     }
 
     /// Prepare text areas for rendering
-    fn prepare_text_areas(&mut self, layout: &[PositionedLine]) -> Result<(), CodeSkewError> {
+    fn prepare_text_areas(&mut self, layout: &[PositionedLine], config: &Config) -> Result<(), CodeSkewError> {
         self.text_state.areas_data.clear();
         self.string_builder.clear();
 
@@ -83,7 +83,7 @@ impl EliteWebGPURenderer {
             // Get or create buffer
             if i >= self.text_state.buffers.len() {
                 self.text_state
-                    .ensure_capacity(i + 1, &mut self.font_system, self.supersampled_width, self.supersampled_height, self.supersampling_factor);
+                    .ensure_capacity(i + 1, &mut self.font_system, self.supersampled_width, self.supersampled_height, self.supersampling_factor, config.fontsize);
             }
 
             let buffer = &mut self.text_state.buffers[i];
@@ -103,12 +103,12 @@ impl EliteWebGPURenderer {
                 None,
             );
 
-            // Create text area data - scale by supersampling factor
+            // Create text area data - use the scale calculated by layout engine
             let area_data = TextAreaData {
                 buffer_index: i,
-                left: line.x * self.supersampling_factor,
-                top: line.y * self.supersampling_factor,
-                scale: self.supersampling_factor,
+                left: line.x,
+                top: line.y,
+                scale: line.scale, // This is the scale factor from layout calculations
                 bounds: TextBounds::default(),
                 default_color: Color::rgb(255, 255, 255), // Fallback color
             };

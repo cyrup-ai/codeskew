@@ -210,7 +210,7 @@ impl Bindings {
             ..Default::default()
         };
         let tex_screen = wgpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
+            label: Some("toy_tex_screen"),
             size: wgpu::Extent3d {
                 width,
                 height,

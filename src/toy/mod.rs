@@ -384,18 +384,19 @@ impl WgpuToyRenderer {
             return Err(format!("Channel {} does not exist", channel));
         }
 
-        // Generate test pattern texture data - simple gradient
+        // Generate noise texture data for zeroshot shader
         let mut data = Vec::with_capacity((width * height * 4) as usize);
         for y in 0..height {
             for x in 0..width {
-                let fx = x as f32 / width as f32;
-                let fy = y as f32 / height as f32;
-                let r = (fx * 255.0) as u8;
-                let g = (fy * 255.0) as u8;
-                let b = 128;
-                data.push(r); // R gradient
-                data.push(g); // G gradient
-                data.push(b); // B constant
+                // Create pseudo-random noise pattern
+                let noise = ((x * 374761393 + y * 668265263) ^ (x * y)) % 256;
+                let noise_f = noise as f32 / 255.0;
+                
+                // Convert to grayscale noise with some variation
+                let val = (noise_f * 255.0) as u8;
+                data.push(val); // R
+                data.push(val); // G  
+                data.push(val); // B
                 data.push(255); // A
             }
         }
@@ -577,6 +578,14 @@ impl WgpuToyRenderer {
         }
         
         // Use the blitter to copy from compute texture to surface
+        // Recreate blitter if texture view is invalid (surgical fix for texture destruction)
+        self._screen_blitter = blit::Blitter::new(
+            &self.wgpu,
+            self.bindings.tex_screen.view(),
+            blit::ColourSpace::Linear,
+            self.wgpu.surface_config.format,
+            wgpu::FilterMode::Nearest,
+        );
         self._screen_blitter.blit(&mut encoder, &frame.texture.create_view(&Default::default()));
 
         // Submit commands

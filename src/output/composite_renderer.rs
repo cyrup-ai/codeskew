@@ -463,6 +463,9 @@ impl CompositeRenderer {
             duration: 1.0,
             fps: 30.0,
             shader: "zeroshot".to_string(),
+
+            // Ligature configuration - use default
+            ligature_config: crate::glyphon::ligature_config::LigatureConfig::default(),
             
             // 3D perspective parameters
             fold: 0.4,

@@ -1,19 +1,19 @@
 #storage canvas array<f32>
 
-fn grad(z: vec2i) -> vec2f {
+fn grad(z: vec2<i32>) -> vec2<f32> {
     var n = z.x + z.y * 11111;
     n = (n << 13u)^n;
     n = (n * (n * n * 15731 + 789221) + 1376312589) >> 16u;
-    return vec2f(cos(float(n)), sin(float(n)));                          
+    return vec2<f32>(cos(float(n)), sin(float(n)));
 }
 
-fn noise(p: vec2f) -> f32 {
-    let i = vec2i(p);
+fn noise(p: vec2<f32>) -> f32 {
+    let i = vec2<i32>(p);
     let f = fract(p);
 	let u = f * f * (3.0 - 2.0 * f);
-    return mix( mix(dot(grad(i + vec2i(0,0)), f - vec2(0.0,0.0)), 
+    return mix( mix(dot(grad(i + vec2i(0,0)), f - vec2(0.0,0.0)),
                     dot(grad(i + vec2i(1,0)), f - vec2(1.0,0.0)), u.x),
-                mix(dot(grad(i + vec2i(0,1)), f - vec2(0.0,1.0)), 
+                mix(dot(grad(i + vec2i(0,1)), f - vec2(0.0,1.0)),
                     dot(grad(i + vec2i(1,1)), f - vec2(1.0,1.0)), u.x), u.y);
 }
 
@@ -21,7 +21,7 @@ fn sRGBtoLinear(c: f32) -> f32 {
     return mix(c / 12.92, pow((c + 0.055) / (1.055), 2.4), step(0.04045, c));
 }
 
-fn lenna(fc: vec2f, res: vec2f) -> f32 {
+fn lenna(fc: vec2<f32>, res: vec2<f32>) -> f32 {
 	let v_0_0 = 2.0 * fc.x / res.x - 1.0;
 	let v_0_1 = 2.0 * fc.y / res.y - 1.0;
 	let v_1_0 = sin(-15.749390 * v_0_0 + 2.467443 * v_0_1 + 0.642972);
@@ -184,17 +184,17 @@ fn lenna(fc: vec2f, res: vec2f) -> f32 {
 
 @compute @workgroup_size(16, 16)
 #dispatch_once initialization
-fn initialization(@builtin(global_invocation_id) gid: vec3u) {
+fn initialization(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = textureDimensions(screen);
 	if (gid.x >= res.x || gid.y >= res.y) { return; }
-    let fc = vec2f(gid.xy) + .5;
-    let dx = vec2f(sin(f32(time.elapsed)) * f32(res.x) * .2, 0.);
-    canvas[gid.x + gid.y * res.x] = lenna(fc + dx, vec2f(res));
+    let fc = vec2<f32>(gid.xy) + .5;
+    let dx = vec2<f32>(sin(f32(time.elapsed)) * f32(res.x) * .2, 0.);
+    canvas[gid.x + gid.y * res.x] = lenna(fc + dx, vec2<f32>(res));
 }
 
 @compute @workgroup_size(16, 16)
-fn main_image(@builtin(global_invocation_id) gid: vec3u) {
+fn main_image(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = textureDimensions(screen);
-    let col = vec3f(canvas[gid.x + gid.y * res.x]);
-    textureStore(screen, vec2u(gid.x, res.y - 1u - gid.y), vec4f(col, 1.));
+    let col = vec3<f32>(canvas[gid.x + gid.y * res.x]);
+    textureStore(screen, vec2<u32>(gid.x, res.y - 1u - gid.y), vec4<f32>(col, 1.));
 }

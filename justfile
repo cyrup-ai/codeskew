@@ -10,7 +10,7 @@ install:
 
 # AWESOME skew command - live animated WGPU preview with 3D skewed code!
 skew file="src/main.rs":
-    cargo run --release -- "{{file}}" --format wgpu --live --shader codeskew_unified
+    cargo run --release -- "{{file}}" --format wgpu --live --shader zeroshot
 
 # Skew with custom angle and perspective
 skew-custom file output="output.png" angle="15" perspective="0.3":

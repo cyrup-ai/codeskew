@@ -1,5 +1,6 @@
 use crate::cli::{Cli, OutputFormat};
 use crate::error::CodeSkewError;
+use crate::glyphon::ligature_config::LigatureConfig;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
@@ -90,7 +91,10 @@ pub struct Config {
     pub duration: f32,
     pub fps: f32,
     pub shader: String,
-    
+
+    // Ligature configuration
+    pub ligature_config: LigatureConfig,
+
     // 3D perspective parameters
     pub fold: f32,
     pub skew_angle: f32,
@@ -113,6 +117,9 @@ impl Config {
 
         // Create the gradient colors with minimal allocation
         let gradient = GradientColors::from_cli(cli);
+
+        // Create ligature configuration based on CLI args and config file
+        let ligature_config = Self::create_ligature_config(cli)?;
 
         // Optimize animation format selection - branch prediction friendly
         if cli.animate && format != OutputFormat::Webp && format != OutputFormat::Wgpu {
@@ -147,12 +154,51 @@ impl Config {
             duration: cli.duration,
             fps: cli.fps,
             shader: cli.shader.clone(),
-            
+
+            // Ligature configuration
+            ligature_config,
+
             // 3D perspective parameters
             fold: cli.fold,
             skew_angle: cli.skew_angle,
             scale: cli.scale,
         })
+    }
+
+    /// Create ligature configuration from CLI arguments and optional config file
+    fn create_ligature_config(cli: &Cli) -> Result<LigatureConfig> {
+        // Start with programming-optimized defaults since this is a code renderer
+        let mut config = LigatureConfig::with_programming_defaults();
+
+        // Apply CLI overrides
+        if !cli.ligatures {
+            config.set_globally_enabled(false);
+        }
+
+        // Load from config file if specified
+        if let Some(config_path) = &cli.ligature_config {
+            if config_path.exists() {
+                let config_content = std::fs::read_to_string(config_path).map_err(|e| {
+                    CodeSkewError::ConfigError(format!(
+                        "Failed to read ligature config file: {}",
+                        e
+                    ))
+                })?;
+
+                let file_config: LigatureConfig =
+                    serde_yaml::from_str(&config_content).map_err(|e| {
+                        CodeSkewError::ConfigError(format!(
+                            "Failed to parse ligature config file: {}",
+                            e
+                        ))
+                    })?;
+
+                // Override with file config
+                config = file_config;
+            }
+        }
+
+        Ok(config)
     }
 
     /// Determine output format from file extension - zero allocation approach

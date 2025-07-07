@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
-use std::path::PathBuf;
 use std::fmt;
+use std::path::PathBuf;
 
 /// CLI arguments for the codeskew tool
 #[derive(Parser, Debug)]
@@ -34,6 +34,22 @@ pub struct Cli {
     #[arg(short = 's', long, default_value_t = 14.0)]
     pub fontsize: f32,
 
+    /// Enable ligatures (auto-detects based on font)
+    #[arg(long, default_value_t = true)]
+    pub ligatures: bool,
+
+    /// Enable programming ligatures (=>, !=, etc.)
+    #[arg(long, default_value_t = true)]
+    pub programming_ligatures: bool,
+
+    /// Enable typography ligatures (fi, fl, etc.)
+    #[arg(long, default_value_t = false)]
+    pub typography_ligatures: bool,
+
+    /// Ligature configuration file (YAML)
+    #[arg(long)]
+    pub ligature_config: Option<PathBuf>,
+
     /// Skew angle in degrees
     #[arg(short = 'k', long, default_value_t = 15.0)]
     pub skew: f32,
@@ -41,7 +57,7 @@ pub struct Cli {
     /// Depth factor for 3D effect
     #[arg(short, long, default_value_t = 0.5)]
     pub depth: f32,
-    
+
     /// Perspective distance for 3D effect
     #[arg(short = 'p', long, default_value_t = 1000.0)]
     pub perspective: f32,
@@ -57,35 +73,35 @@ pub struct Cli {
     /// End gradient color (hex)
     #[arg(long, default_value = "#4a4a4a")]
     pub gradient_end: String,
-    
+
     /// Enable animation (for GIF output)
     #[arg(short, long, default_value_t = false)]
     pub animate: bool,
-    
+
     /// Center the code in the image
     #[arg(short = 'c', long, default_value_t = false)]
     pub centered: bool,
-    
+
     /// Syntax highlighting theme
     #[arg(short = 't', long, default_value = "monokai")]
     pub theme: String,
-    
+
     /// Create Telegram-compatible sticker (512x512 round WebP)
     #[arg(short = 'T', long, default_value_t = false)]
     pub telegram: bool,
-    
+
     /// Animation duration in seconds (for animated formats)
     #[arg(long, default_value_t = 3.0)]
     pub duration: f32,
-    
+
     /// Animation frames per second (for animated formats)
     #[arg(long, default_value_t = 30.0)]
     pub fps: f32,
-    
+
     /// Background shader for the composite renderer
     #[arg(long, default_value = "zeroshot_original")]
     pub shader: String,
-    
+
     /// Launch live animated preview window (shorthand for --format wgpu)
     #[arg(short = 'L', long, default_value_t = false)]
     pub live: bool,
@@ -101,7 +117,6 @@ pub struct Cli {
     /// Overall 3D scale factor for perspective effects
     #[arg(long, default_value_t = 0.6)]
     pub scale: f32,
-    
 }
 
 /// Output format for the rendered code
@@ -131,4 +146,3 @@ impl fmt::Display for OutputFormat {
         }
     }
 }
-

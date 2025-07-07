@@ -104,11 +104,12 @@ pub struct EliteWebGPURenderer {
 impl EliteWebGPURenderer {
     /// Creates a new renderer with animated WGSL background support
     pub async fn new(width: u32, height: u32) -> Result<Self, CodeSkewError> {
-        Self::new_with_supersampling(width, height, 3.0).await
+        // Use a default base font size - this will be overridden by actual calculated size
+        Self::new_with_supersampling(width, height, 3.0, 16.0).await
     }
     
-    /// Creates a new renderer with configurable supersampling factor
-    pub async fn new_with_supersampling(width: u32, height: u32, supersampling_factor: f32) -> Result<Self, CodeSkewError> {
+    /// Creates a new renderer with configurable supersampling factor and base font size
+    pub async fn new_with_supersampling(width: u32, height: u32, supersampling_factor: f32, base_font_size: f32) -> Result<Self, CodeSkewError> {
         // Validate dimensions
         if width == 0 || height == 0 {
             return Err(CodeSkewError::RenderingError(format!(
@@ -163,7 +164,7 @@ impl EliteWebGPURenderer {
         let mut font_system = FontSystem::new();
         let cache = SwashCache::new();
         let glyphon_cache = Cache::new(&device);
-        let viewport = Viewport::new(&device, &glyphon_cache);
+        let mut viewport = Viewport::new(&device, &glyphon_cache);
         let mut text_atlas = TextAtlas::new(
             &device,
             &queue,
@@ -180,6 +181,9 @@ impl EliteWebGPURenderer {
         // Calculate supersampled dimensions
         let supersampled_width = (width as f32 * supersampling_factor) as u32;
         let supersampled_height = (height as f32 * supersampling_factor) as u32;
+        
+        // Update viewport for supersampled rendering
+        viewport.update(&queue, Resolution { width: supersampled_width, height: supersampled_height });
         
         // Create render targets
         let background_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -430,7 +434,8 @@ impl EliteWebGPURenderer {
             cache: None,
         });
 
-        let text_state = TextRenderState::new(64, &mut font_system, supersampled_width, supersampled_height, supersampling_factor);
+        // Use default font size for buffer creation - will be updated with actual size during rendering
+        let text_state = TextRenderState::new(64, &mut font_system, supersampled_width, supersampled_height, supersampling_factor, 14.0);
         let command_state = CommandBufferState::new("Elite Renderer");
 
         Ok(Self {
