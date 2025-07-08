@@ -14,6 +14,8 @@ impl EliteWebGPURenderer {
         layout: &[PositionedLine],
         config: &Config,
     ) -> Result<Vec<u8>, CodeSkewError> {
+        log::info!("🔤 RENDER ENTRY: {} positioned lines", layout.len());
+        
         // Update time
         let now = std::time::Instant::now();
         self.time_delta = now.duration_since(self.last_frame_time).as_secs_f32();
@@ -33,7 +35,9 @@ impl EliteWebGPURenderer {
         );
 
         // Prepare text areas
+        log::info!("🔤 About to prepare text areas for {} lines", layout.len());
         self.prepare_text_areas(layout, config)?;
+        log::info!("🔤 Text areas prepared successfully");
 
         // Render composite
         self.render_composite_internal(layout)?;
@@ -49,6 +53,7 @@ impl EliteWebGPURenderer {
 
     /// Prepare text areas for rendering
     fn prepare_text_areas(&mut self, layout: &[PositionedLine], config: &Config) -> Result<(), CodeSkewError> {
+        log::info!("🔤 Preparing text areas for {} lines", layout.len());
         self.text_state.areas_data.clear();
         self.string_builder.clear();
 
@@ -82,11 +87,14 @@ impl EliteWebGPURenderer {
 
             // Get or create buffer
             if i >= self.text_state.buffers.len() {
+                log::debug!("🔤 Creating buffer {} (current count: {})", i, self.text_state.buffers.len());
                 self.text_state
                     .ensure_capacity(i + 1, &mut self.font_system, self.supersampled_width, self.supersampled_height, self.supersampling_factor, config.fontsize);
+                log::debug!("🔤 Buffer count after ensure_capacity: {}", self.text_state.buffers.len());
             }
 
             let buffer = &mut self.text_state.buffers[i];
+            log::debug!("🔤 Using buffer {} for line {}", i, i);
             
             // Use set_rich_text instead of set_text for per-segment coloring
             // Convert String to &str for the API
@@ -103,11 +111,16 @@ impl EliteWebGPURenderer {
                 None,
             );
 
-            // Create text area data - use the scale calculated by layout engine
+            // Create text area data - scale coordinates for supersampled viewport
+            let scaled_x = line.x * self.supersampling_factor;
+            let scaled_y = line.y * self.supersampling_factor;
+            log::debug!("🔤 Line {}: original coords ({}, {}), scaled coords ({}, {}), scale: {}", 
+                       i, line.x, line.y, scaled_x, scaled_y, line.scale);
+            
             let area_data = TextAreaData {
                 buffer_index: i,
-                left: line.x,
-                top: line.y,
+                left: scaled_x,
+                top: scaled_y,
                 scale: line.scale, // This is the scale factor from layout calculations
                 bounds: TextBounds::default(),
                 default_color: Color::rgb(255, 255, 255), // Fallback color
@@ -145,7 +158,7 @@ impl EliteWebGPURenderer {
             });
 
             render_pass.set_pipeline(&self.composite_pipeline);
-            render_pass.set_bind_group(0, &self.composite_bind_group, &[]);
+            // No bind groups needed for simple composite shader
             // Set viewport to supersampled dimensions
             render_pass.set_viewport(0.0, 0.0, self.supersampled_width as f32, self.supersampled_height as f32, 0.0, 1.0);
             render_pass.draw(0..3, 0..1);
@@ -153,9 +166,12 @@ impl EliteWebGPURenderer {
 
             // Render text on top if we have positioned lines
             if !positioned_lines.is_empty() {
+                log::info!("🔤 Preparing {} positioned lines for text rendering", positioned_lines.len());
                 let text_areas = self.text_state.prepare_areas();
+                log::info!("🔤 Prepared {} text areas", text_areas.len());
 
                 // Prepare text for rendering
+                log::info!("🔤 Calling text_renderer.prepare()");
                 self.text_renderer
                     .prepare(
                         &self.device,
@@ -167,8 +183,10 @@ impl EliteWebGPURenderer {
                         &mut self.cache,
                     )
                     .map_err(|e| {
+                        log::error!("🔤 Text preparation failed: {e:?}");
                         CodeSkewError::RenderingError(format!("Text preparation failed: {e:?}"))
                     })?;
+                log::info!("🔤 Text preparation completed successfully");
 
                 let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Supersampled Text Render Pass"),
@@ -186,13 +204,17 @@ impl EliteWebGPURenderer {
                 });
 
                 // Set viewport to supersampled dimensions for text rendering
+                log::info!("🔤 Setting render pass viewport to supersampled dimensions: {}x{}", self.supersampled_width, self.supersampled_height);
                 render_pass.set_viewport(0.0, 0.0, self.supersampled_width as f32, self.supersampled_height as f32, 0.0, 1.0);
                 
+                log::info!("🔤 Calling text_renderer.render()");
                 self.text_renderer
                     .render(&self.text_atlas, &self.viewport, &mut render_pass)
                     .map_err(|e| {
+                        log::error!("🔤 Text rendering failed: {e:?}");
                         CodeSkewError::RenderingError(format!("Text rendering failed: {e:?}"))
                     })?;
+                log::info!("🔤 Text rendering completed successfully");
             }
             
             // Second pass: Downsample from supersampled texture to composite texture

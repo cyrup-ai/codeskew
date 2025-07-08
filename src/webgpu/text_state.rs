@@ -46,10 +46,15 @@ impl TextRenderState {
 
     #[inline]
     pub fn prepare_areas(&self) -> Vec<TextArea> {
-        self.areas_data
+        log::debug!("🔤 prepare_areas: {} area data entries, {} buffers", self.areas_data.len(), self.buffers.len());
+        
+        let areas: Vec<TextArea> = self.areas_data
             .iter()
-            .filter_map(|area_data| {
+            .enumerate()
+            .filter_map(|(idx, area_data)| {
                 if area_data.buffer_index < self.buffers.len() {
+                    log::debug!("🔤 Area {}: buffer_idx={}, pos=({}, {}), scale={}", 
+                               idx, area_data.buffer_index, area_data.left, area_data.top, area_data.scale);
                     Some(TextArea {
                         buffer: &self.buffers[area_data.buffer_index],
                         left: area_data.left,
@@ -60,10 +65,15 @@ impl TextRenderState {
                         custom_glyphs: &[],
                     })
                 } else {
+                    log::warn!("🔤 Area {}: buffer_idx={} >= buffer count {}, skipping", 
+                              idx, area_data.buffer_index, self.buffers.len());
                     None
                 }
             })
-            .collect()
+            .collect();
+            
+        log::debug!("🔤 prepare_areas: returning {} text areas", areas.len());
+        areas
     }
 
     #[inline]

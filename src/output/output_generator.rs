@@ -307,26 +307,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
             .map_err(|e| CodeSkewError::RenderingError(format!("Failed to create WGPU context: {e}")))?;
         
         let mut wgputoy = crate::toy::WgpuToyRenderer::new(wgpu_context);
+
+        // ALSO create Elite WebGPU renderer for text testing
+        log::info!("🔤 Creating EliteWebGPURenderer for text testing");
+        let mut elite_renderer = EliteWebGPURenderer::new(
+            self.width_u32, 
+            self.height_u32
+        ).await.map_err(|e| CodeSkewError::RenderingError(format!("Failed to create Elite renderer: {e}")))?;
+        log::info!("🔤 EliteWebGPURenderer created successfully");
+        
+        // Test rendering a single frame with the elite renderer
+        log::info!("🔤 Testing single frame render with elite renderer");
+        let _test_result = elite_renderer.render(layout, &self.config)?;
+        log::info!("🔤 Elite renderer test completed");
         
         // Load shader-specific textures (including font atlas for unified shader)
         let shader_name = self.config.shader.clone();
-        if let Err(e) = self.load_shader_textures(&mut wgputoy, &shader_name).await {
-            println!("🔧 WARNING: Failed to load shader textures: {}", e);
-        } else {
-            wgputoy.recreate_bind_group();
-            println!("🔧 DEBUG: Loaded shader-specific textures");
-        }
-        
-        // Load our shader
-        self.shader_buffer.clear();
-        self.load_shader(&shader_name);
-        
-        if let Some(source_map) = wgputoy.preprocess_async(&self.shader_buffer).await {
-            println!("🔧 Compiling shader for live preview...");
-            wgputoy.compile(source_map);
-        } else {
-            return Err(CodeSkewError::RenderingError("Shader compilation failed".to_string()));
-        }
 
         // Load text data for unified shader using Glyphon
         if shader_name == "codeskew_unified" {

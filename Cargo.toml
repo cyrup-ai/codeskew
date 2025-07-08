@@ -19,70 +19,71 @@ name = "codeskew"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = "1.0.98"
-async-recursion = "1.1.1"
-base64 = "0.22.1"
-bitvec = "1.0.1"
-cached = "0.55.1"
-clap = { version = "4.5.38", features = ["derive"] }
-colorgrad = "0.7.1"
-env_logger = "0.11.8"
-euclid = "0.22.11"
-futures-intrusive = "0.5.0"
+anyhow = "1.0"
+async-recursion = "1.1"
+base64 = "0.22"
+bitvec = "1.0"
+cached = "0.55"
+clap = { version = "4.5", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+colorgrad = "0.7"
+env_logger = "0.11"
+euclid = "0.22"
+futures-intrusive = "0.5"
 
-gif = "0.13.1"
-http-cache-reqwest = "0.16.0"
-image = { version = "0.25.6", features = ["webp"] }
-indexmap = "2.10.0"
-instant = "0.1.13"
-itertools = "0.13.0"
-lazy-regex = "3.3.0"
-log = "0.4.22"
-notify = "8.1.0"
+gif = "0.13"
+http-cache-reqwest = "0.16"
+image = { version = "0.25", features = ["webp"] }
+indexmap = "2.10"
+instant = "0.1"
+itertools = "0.14"
+lazy-regex = "3.4"
+log = "0.4"
+notify = "8.1"
 
-reqwest = { version = "0.12.22", features = ["json"] }
-reqwest-middleware = "0.4.2"
-rayon = "1.10.0"
-rustc-hash = "2.1.0"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
+reqwest = { version = "0.12", features = ["json"] }
+reqwest-middleware = "0.4"
+rayon = "1.10"
+rustc-hash = "2.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 serde_yaml = "0.9"
-svg = "0.18.0"
-syntect = "5.2.0"
-thiserror = "2.0.12"
+svg = "0.18"
+syntect = "5.2"
+thiserror = "2.0"
 unicode-normalization = "0.1"
-wasm-bindgen = "0.2.99"
-webp-animation = "0.9.0"
+wasm-bindgen = "0.2"
+webp-animation = "0.9"
 # WebGPU for sexy 3D rendering
-wgpu = "25.0.2"
-winit = "0.30.11"
-bytemuck = { version = "1.23.1", features = ["derive"] }
-nalgebra = "0.32"
-pollster = "0.3"
+wgpu = "25.0"
+winit = "0.30"
+bytemuck = { version = "1.23", features = ["derive"] }
+nalgebra = "0.33"
+pollster = "0.4"
 flume = "0.11"
 # High-performance text rendering
-glyphon = "0.9.0"
-cosmic-text = "0.14.2"
+glyphon = "0.9"
+cosmic-text = "0.14"
 # Async runtime
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.46", features = ["full"] }
 # WebP support
 webp = "0.3"
 
-snailquote = "0.3.1"
-futures = "0.3.31"
-half = "2.6.0"
+snailquote = "0.3"
+futures = "0.3"
+half = "2.6"
 # Nerd font loader dependencies
-directories = "5.0"
-zip = "2.2.1"
+directories = "6.0"
+zip = "4.2"
 
 [features]
 default = ["winit"]
 winit = []
 
 [dev-dependencies]
-tempfile = "3.20.0"
-assert_cmd = "2.0.17"
-assert_fs = "1.1.3"
+tempfile = "3.20"
+assert_cmd = "2.0"
+assert_fs = "1.1"
 
 [target.wasm32-unknown-unknown.dependencies]
-wasm-bindgen-futures = "0.4.50"
+wasm-bindgen-futures = "0.4"

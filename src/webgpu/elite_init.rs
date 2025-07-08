@@ -161,29 +161,41 @@ impl EliteWebGPURenderer {
         });
 
         // Initialize text rendering system
+        log::info!("🔤 Initializing text rendering system");
         let mut font_system = FontSystem::new();
+        log::info!("🔤 Created FontSystem");
         let cache = SwashCache::new();
+        log::info!("🔤 Created SwashCache");
         let glyphon_cache = Cache::new(&device);
+        log::info!("🔤 Created glyphon Cache");
         let mut viewport = Viewport::new(&device, &glyphon_cache);
+        log::info!("🔤 Created Viewport");
+        // Calculate supersampled dimensions first
+        let supersampled_width = (width as f32 * supersampling_factor) as u32;
+        let supersampled_height = (height as f32 * supersampling_factor) as u32;
+        
+        log::info!("🔤 Creating TextAtlas with format {:?}", wgpu::TextureFormat::Rgba8UnormSrgb);
         let mut text_atlas = TextAtlas::new(
             &device,
             &queue,
             &glyphon_cache,
             wgpu::TextureFormat::Rgba8UnormSrgb,
         );
+        log::info!("🔤 Created TextAtlas successfully");
+        
+        log::info!("🔤 Creating TextRenderer");
         let text_renderer = TextRenderer::new(
             &mut text_atlas,
             &device,
             wgpu::MultisampleState::default(),
             None,
         );
-
-        // Calculate supersampled dimensions
-        let supersampled_width = (width as f32 * supersampling_factor) as u32;
-        let supersampled_height = (height as f32 * supersampling_factor) as u32;
+        log::info!("🔤 Created TextRenderer successfully");
         
-        // Update viewport for supersampled rendering
+        // Update viewport to supersampled dimensions for proper rendering
+        log::info!("🔤 Updating viewport to supersampled dimensions: {}x{}", supersampled_width, supersampled_height);
         viewport.update(&queue, Resolution { width: supersampled_width, height: supersampled_height });
+        log::info!("🔤 Viewport updated successfully");
         
         // Create render targets
         let background_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -274,7 +286,7 @@ impl EliteWebGPURenderer {
         let composite_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Composite Pipeline Layout"),
-                bind_group_layouts: &[&composite_bind_group_layout],
+                bind_group_layouts: &[], // No bind groups needed for simple composite shader
                 push_constant_ranges: &[],
             });
 

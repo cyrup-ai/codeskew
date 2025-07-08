@@ -87,11 +87,11 @@ impl WgpuToyRenderer {
     /// Compile shader source into compute pipeline - the missing piece!
     pub fn compile(&mut self, source: pp::SourceMap) {
         let now = instant::Instant::now();
-        
+
         // Generate prelude with binding declarations
         let prelude = self.prelude();
         let wgsl = format!("{}{}", prelude, source.source);
-        
+
         // Parse entry points from the complete WGSL
         let re_entry_point = regex!(r"(?s)@compute.*?@workgroup_size\((.*?)\).*?fn\s+(\w+)");
         let entry_points: Vec<(String, [u32; 3])> = re_entry_point
@@ -130,17 +130,17 @@ impl WgpuToyRenderer {
             });
         }
 
-        println!("🔧 DEBUG: Compiled {} compute pipelines in {:.3}s", 
-                 self.compute_pipelines.len(), 
+        println!("🔧 DEBUG: Compiled {} compute pipelines in {:.3}s",
+                 self.compute_pipelines.len(),
                  now.elapsed().as_secs_f32());
-        
+
         self.source = source;
     }
-    
+
     /// Generate prelude with all binding declarations
     fn prelude(&self) -> String {
         let mut s = String::new();
-        
+
         // Type aliases for convenience
         for (a, t) in [("int", "i32"), ("uint", "u32"), ("float", "f32")] {
             s.push_str(&format!("alias {a} = {t};\n"));
@@ -155,30 +155,30 @@ impl WgpuToyRenderer {
                 s.push_str(&format!("alias float{n}x{m} = mat{n}x{m}<f32>;\n"));
             }
         }
-        
+
         // Standard structs
         s.push_str(r#"
 struct Time { frame: uint, elapsed: float, delta: float }
 struct Mouse { pos: uint2, click: int }
 struct DispatchInfo { id: uint }
 "#);
-        
+
         // Custom struct (simplified for now)
         s.push_str("struct Custom { _dummy: float };\n");
-        
-        // Data struct (simplified for now)  
+
+        // Data struct (simplified for now)
         s.push_str("struct Data { _dummy: array<u32,1> };\n");
-        
+
         // All binding declarations
         s.push_str(&self.bindings.to_wgsl());
-        
+
         // Helper functions
         s.push_str(r#"
 fn keyDown(keycode: uint) -> bool {
     return ((_keyboard[keycode / 128u][(keycode % 128u) / 32u] >> (keycode % 32u)) & 1u) == 1u;
 }
 "#);
-        
+
         s
     }
 
@@ -197,37 +197,37 @@ impl WgpuToyRenderer {
         // Update time for animation
         self.bindings.time.host.elapsed += 0.016; // ~60fps
         self.bindings.time.host.frame = self.bindings.time.host.frame.wrapping_add(1);
-        
+
         // Stage uniform data
         self.bindings.stage(&self.wgpu.queue);
-        
+
         // Create command encoder
         let mut encoder = self.wgpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
-        
+
         // Dispatch compute shaders
         for pipeline in &self.compute_pipelines {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Compute Pass"),
                 timestamp_writes: None,
             });
-            
+
             let workgroup_count = pipeline.workgroup_count.unwrap_or([
                 self.screen_width.div_ceil(pipeline.workgroup_size[0]),
                 self.screen_height.div_ceil(pipeline.workgroup_size[1]),
                 1,
             ]);
-            
+
             compute_pass.set_pipeline(&pipeline.pipeline);
             compute_pass.set_bind_group(0, &self.compute_bind_group, &[0]);
             compute_pass.dispatch_workgroups(
                 workgroup_count[0],
-                workgroup_count[1], 
+                workgroup_count[1],
                 workgroup_count[2],
             );
         }
-        
+
         // Create staging buffer for readback (rgba16float = 8 bytes per pixel)
         let bytes_per_row = (self.screen_width * 8).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let staging_buffer = self.wgpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -236,7 +236,7 @@ impl WgpuToyRenderer {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        
+
         // Copy texture to staging buffer
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -288,10 +288,10 @@ impl WgpuToyRenderer {
         // Read the data and convert from f16 to u8
         let data = buffer_slice.get_mapped_range();
         let f16_data: &[u8] = &data;
-        
+
         // Convert from rgba16float to rgba8unorm
         let mut result = Vec::with_capacity((self.screen_width * self.screen_height * 4) as usize);
-        
+
         // Process row by row to handle padding
         for y in 0..self.screen_height {
             let row_offset = (y * bytes_per_row) as usize;
@@ -304,7 +304,7 @@ impl WgpuToyRenderer {
                     let g = half::f16::from_le_bytes([chunk[2], chunk[3]]).to_f32();
                     let b = half::f16::from_le_bytes([chunk[4], chunk[5]]).to_f32();
                     let a = half::f16::from_le_bytes([chunk[6], chunk[7]]).to_f32();
-                    
+
                     result.push((r.clamp(0.0, 1.0) * 255.0) as u8);
                     result.push((g.clamp(0.0, 1.0) * 255.0) as u8);
                     result.push((b.clamp(0.0, 1.0) * 255.0) as u8);
@@ -389,13 +389,13 @@ impl WgpuToyRenderer {
         for y in 0..height {
             for x in 0..width {
                 // Create pseudo-random noise pattern
-                let noise = ((x * 374761393 + y * 668265263) ^ (x * y)) % 256;
+                let noise = ((x.wrapping_mul(374761393).wrapping_add(y.wrapping_mul(668265263))) ^ (x * y)) % 256;
                 let noise_f = noise as f32 / 255.0;
-                
+
                 // Convert to grayscale noise with some variation
                 let val = (noise_f * 255.0) as u8;
                 data.push(val); // R
-                data.push(val); // G  
+                data.push(val); // G
                 data.push(val); // B
                 data.push(255); // A
             }
@@ -472,9 +472,9 @@ impl WgpuToyRenderer {
             bytemuck::cast_slice(&color_buffer)
         );
 
-        println!("🔤 Uploaded shader text data: {} characters, {} colors", 
+        println!("🔤 Uploaded shader text data: {} characters, {} colors",
                  terminal_buffer.len(), color_buffer.len());
-        
+
         Ok(())
     }
 
@@ -554,20 +554,20 @@ impl WgpuToyRenderer {
     /// Render to surface - simplified version from wgpu-compute-toy
     fn render_to_surface(&mut self, frame: &wgpu::SurfaceTexture) {
         let mut encoder = self.wgpu.device.create_command_encoder(&Default::default());
-        
+
         // Stage uniform data
         self.bindings.stage(&self.wgpu.queue);
-        
+
         // Dispatch compute shaders
         for pipeline in &self.compute_pipelines {
             let mut compute_pass = encoder.begin_compute_pass(&Default::default());
-            
+
             let workgroup_count = pipeline.workgroup_count.unwrap_or([
                 self.screen_width.div_ceil(pipeline.workgroup_size[0]),
                 self.screen_height.div_ceil(pipeline.workgroup_size[1]),
                 1,
             ]);
-            
+
             compute_pass.set_pipeline(&pipeline.pipeline);
             compute_pass.set_bind_group(0, &self.compute_bind_group, &[0]);
             compute_pass.dispatch_workgroups(
@@ -576,7 +576,7 @@ impl WgpuToyRenderer {
                 workgroup_count[2],
             );
         }
-        
+
         // Use the blitter to copy from compute texture to surface
         // Recreate blitter if texture view is invalid (surgical fix for texture destruction)
         self._screen_blitter = blit::Blitter::new(
@@ -590,7 +590,7 @@ impl WgpuToyRenderer {
 
         // Submit commands
         self.wgpu.queue.submit(std::iter::once(encoder.finish()));
-        
+
         // Update frame counter
         self.bindings.time.host.frame = self.bindings.time.host.frame.wrapping_add(1);
     }
