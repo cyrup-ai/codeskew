@@ -1154,7 +1154,7 @@ fn get_char_pattern(char_code: u32, pixel_x: u32, pixel_y: u32) -> bool {
 
 // Render a single character using simple bitmap font
 fn render_character(char_code: u32, world_pos: float2, color: float4, screen_uv: float2, t: float) -> float4 {
-    let char_size = float2(0.010, 0.014); // Character size in UV space
+    let char_size = float2(0.020, 0.028); // 2x larger character size for readability
     let char_uv = screen_uv - world_pos;
     
     // Check if we're within character bounds
@@ -1164,7 +1164,7 @@ fn render_character(char_code: u32, world_pos: float2, color: float4, screen_uv:
         let pixel_y = u32((char_uv.y + char_size.y) / (2.0 * char_size.y) * 7.0);
         
         if (pixel_x < 5u && pixel_y < 7u && get_char_pattern(char_code, pixel_x, pixel_y)) {
-            return float4(0.0, 1.0, 1.0, 0.9); // Bright cyan for visible pixels
+            return float4(color.rgb, 0.9); // Use actual syntax highlighting colors
         }
     }
     
