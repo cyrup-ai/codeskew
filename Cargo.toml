@@ -75,6 +75,8 @@ half = "2.6"
 # Nerd font loader dependencies
 directories = "6.0"
 zip = "4.2"
+# MiniJinja for WGSL templating
+minijinja = { version = "2.5", features = ["builtins"] }
 
 [features]
 default = ["winit"]

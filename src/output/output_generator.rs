@@ -7,7 +7,6 @@ use crate::highlight::SyntaxHighlighter;
 use crate::layout::{LayoutEngine, PositionedLine};
 use crate::output::SaveMethods;
 use crate::toy::{WgpuToyRenderer, init_wgpu};
-use crate::webgpu::EliteWebGPURenderer;
 use anyhow::Result;
 use image::RgbaImage;
 use std::time::Instant;
@@ -34,6 +33,24 @@ struct ShaderTexture {
     img: String,
     thumb: Option<String>,
     url: Option<String>,
+}
+
+/// Template data for MiniJinja WGSL generation
+#[derive(Debug)]
+struct TemplateData {
+    characters: Vec<u32>,
+    colors: Vec<u32>,
+    positions: Vec<PositionData>,
+    max_chars_per_line: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct PositionData {
+    line_idx: usize,
+    char_idx: usize,
+    x: f32,
+    y: f32,
+    scale: f32,
 }
 
 /// High-performance composite renderer combining toy shader backgrounds with elite text rendering
@@ -97,7 +114,7 @@ impl OutputGenerator {
         })
     }
 
-    /// Generate gorgeous composite output with blazing performance and zero allocation
+    /// Generate output using toy renderer with blazing performance and zero allocation
     #[inline]
     pub async fn generate(&mut self, code: &str) -> Result<(), CodeSkewError> {
         let start_time = Instant::now();
@@ -118,8 +135,27 @@ impl OutputGenerator {
             return Ok(());
         }
 
-        // For static outputs, do composite rendering: toy background + elite text
-        let image = self.render_composite_layers(&layout).await?;
+        // For static outputs, render using toy renderer
+        let wgpu_context = init_wgpu(self.width_u32, self.height_u32, "")
+            .await
+            .map_err(|e| {
+                CodeSkewError::RenderingError(format!("Failed to create WGPU context: {e}"))
+            })?;
+        
+        // Render with toy renderer (optionally with text if shader supports it)
+        let buffer_data = self.render_with_toy(wgpu_context).await?;
+        
+        // Convert buffer to image
+        let image = RgbaImage::from_raw(
+            self.width_u32,
+            self.height_u32,
+            buffer_data,
+        )
+        .ok_or_else(|| {
+            CodeSkewError::RenderingError(
+                "Failed to create RgbaImage from buffer".to_string(),
+            )
+        })?;
 
         // Save output with optimized format handling
         let save_methods = SaveMethods::new(&self.config);
@@ -127,7 +163,7 @@ impl OutputGenerator {
             OutputFormat::Png => save_methods.save_png_optimized(image).await?,
             OutputFormat::Svg => {
                 return Err(CodeSkewError::ConfigError(
-                    "SVG not supported in composite mode".to_string(),
+                    "SVG not supported with WGSL shaders".to_string(),
                 ));
             }
             OutputFormat::Gif => save_methods.save_gif_animation_optimized(&layout).await?,
@@ -136,7 +172,7 @@ impl OutputGenerator {
         }
 
         println!(
-            "🚀 Composite render completed in {:.2?}! ✨",
+            "🚀 Render completed in {:.2?}! ✨",
             start_time.elapsed()
         );
         println!("💎 Output saved to: {}", self.config.output.display());
@@ -144,65 +180,14 @@ impl OutputGenerator {
         Ok(())
     }
 
-    /// Render composite layers: toy background + elite text with zero allocation and blazing performance
+
+    /// Render using toy shaders with optimized performance
     #[inline]
-    async fn render_composite_layers(
-        &mut self,
-        layout: &[PositionedLine],
-    ) -> Result<RgbaImage, CodeSkewError> {
-        println!("🎨 Rendering composite layers: toy background + elite text");
-
-        // Create shared WebGPU context - single allocation for entire pipeline
-        let wgpu_context = init_wgpu(self.width_u32, self.height_u32, "")
-            .await
-            .map_err(|e| {
-                CodeSkewError::RenderingError(format!("Failed to create WGPU context: {e}"))
-            })?;
-
-        // EPIC: Proper layered rendering - animated background + glyphon 3D text!
-        println!("🚀 LAYERED: Rendering animated background + glyphon 3D text!");
-        
-        // Step 1: Render animated background with toy shaders
-        let background_data = self.render_background_layer(wgpu_context).await?;
-        
-        // Step 2: Render 3D text with glyphon (using existing elite renderer)
-        let text_data = self.render_text_layer(layout).await?;
-        
-        // Step 3: Composite layers with proper alpha blending
-        self.composite_layers_optimized(&background_data, &text_data)?;
-
-        // Debug buffer before image creation
-        println!("🔧 DEBUG: Pre-image buffer length: {}", self.rgba_buffer.len());
-        let pre_image_non_zero = self.rgba_buffer.iter().filter(|&&x| x != 0).count();
-        println!("🔧 DEBUG: Pre-image non-zero bytes: {}/{}", pre_image_non_zero, self.rgba_buffer.len());
-
-        // Convert pre-allocated buffer to RgbaImage with zero copy optimization
-        let rgba_image = RgbaImage::from_raw(
-            self.width_u32,
-            self.height_u32,
-            std::mem::take(&mut self.rgba_buffer),
-        )
-        .ok_or_else(|| {
-            CodeSkewError::RenderingError(
-                "Failed to create RgbaImage from pre-allocated buffer".to_string(),
-            )
-        })?;
-        
-        println!("🔧 DEBUG: Created RgbaImage {}x{}", rgba_image.width(), rgba_image.height());
-
-        // Restore buffer for next use
-        self.rgba_buffer = rgba_image.clone().into_raw();
-
-        Ok(rgba_image)
-    }
-
-    /// Render animated background using toy shaders with optimized performance
-    #[inline]
-    async fn render_background_layer(
+    async fn render_with_toy(
         &mut self,
         wgpu_context: crate::toy::WgpuContext,
     ) -> Result<Vec<u8>, CodeSkewError> {
-        println!("🔧 DEBUG: Starting background layer render");
+        println!("🔧 DEBUG: Starting toy renderer");
         let mut toy_renderer = WgpuToyRenderer::new(wgpu_context);
 
         // Load actual texture file into channel0
@@ -308,43 +293,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
         
         let mut wgputoy = crate::toy::WgpuToyRenderer::new(wgpu_context);
 
-        // ALSO create Elite WebGPU renderer for text testing
-        log::info!("🔤 Creating EliteWebGPURenderer for text testing");
-        let mut elite_renderer = EliteWebGPURenderer::new(
-            self.width_u32, 
-            self.height_u32
-        ).await.map_err(|e| CodeSkewError::RenderingError(format!("Failed to create Elite renderer: {e}")))?;
-        log::info!("🔤 EliteWebGPURenderer created successfully");
-        
-        // Test rendering a single frame with the elite renderer
-        log::info!("🔤 Testing single frame render with elite renderer");
-        let _test_result = elite_renderer.render(layout, &self.config)?;
-        log::info!("🔤 Elite renderer test completed");
-        
-        // Load shader-specific textures (including font atlas for unified shader)
-        let shader_name = self.config.shader.clone();
+        // Process all shaders through unified MiniJinja template system
+        let rendered_wgsl = self.process_shader_template(layout).await?;
 
-        // Load text data for unified shader using Glyphon
-        if shader_name == "codeskew_unified" {
-            if let Err(e) = self.render_glyphon_to_texture(&mut wgputoy, layout).await {
-                println!("🔧 WARNING: Failed to render Glyphon text: {}", e);
-                // Fallback to old method
-                let text_data = crate::shader_data::ShaderTextData::from_layout(layout);
-                if let Err(e) = wgputoy.load_shader_text_data(&text_data) {
-                    println!("🔧 WARNING: Failed to load shader text data: {}", e);
-                } else {
-                    println!("🔤 Loaded text data for unified shader (fallback)");
-                }
-            } else {
-                println!("🔤 Loaded Glyphon text for unified shader");
-            }
-        }
-
-        // Load procedural texture
+        // Load textures for all shaders (unified path)
         if let Err(e) = wgputoy.load_procedural_texture(0, 256, 256) {
             println!("🔧 WARNING: Failed to load texture: {}", e);
         } else {
             wgputoy.recreate_bind_group();
+        }
+
+        // Compile the unified rendered shader
+        println!("🔧 Compiling unified shader template");
+        if let Some(source_map) = wgputoy.preprocess_async(&rendered_wgsl).await {
+            println!("🔧 Unified shader preprocessing successful");
+            wgputoy.compile(source_map);
+            println!("🔧 Unified shader compilation successful");
+        } else {
+            return Err(CodeSkewError::RenderingError("Failed to preprocess unified shader".to_string()));
         }
 
         wgputoy.wgpu.window.set_title("CodeSkew Live Preview");
@@ -585,98 +551,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
         Ok(texture_data)
     }
 
-    /// Render 3D perspective text with elite renderer and optimal performance
-    #[inline]
-    async fn render_text_layer(&self, layout: &[PositionedLine]) -> Result<Vec<u8>, CodeSkewError> {
-        println!("🔧 DEBUG: Starting text layer render with {} lines", layout.len());
-        let mut elite_renderer = EliteWebGPURenderer::new(self.width_u32, self.height_u32).await?;
 
-        let text_data = elite_renderer
-            .render(layout, &self.config)
-            .map_err(|e| CodeSkewError::RenderingError(format!("Text render failed: {e}")))?;
-        
-        println!("🔧 DEBUG: Text data length: {}", text_data.len());
-        if text_data.len() >= 16 {
-            println!("🔧 DEBUG: First 16 bytes: {:?}", &text_data[0..16]);
-        }
-        
-        // Check for non-zero data
-        let non_zero_count = text_data.iter().filter(|&&x| x != 0).count();
-        println!("🔧 DEBUG: Non-zero bytes in text: {}/{}", non_zero_count, text_data.len());
-        
-        Ok(text_data)
-    }
-
-    /// Ultra-high-performance layer compositing with zero allocation and optimized integer arithmetic
-    #[inline]
-    fn composite_layers_optimized(
-        &mut self,
-        background_data: &[u8],
-        text_data: &[u8],
-    ) -> Result<(), CodeSkewError> {
-        println!("🔧 DEBUG: Starting layer compositing");
-        println!("🔧 DEBUG: Background buffer size: {}, Text buffer size: {}", background_data.len(), text_data.len());
-        println!("🔧 DEBUG: Expected buffer size: {}", self.buffer_size);
-        
-        // Validate input data integrity with efficient checks
-        if background_data.len() < self.buffer_size {
-            return Err(CodeSkewError::RenderingError(
-                "Background data buffer insufficient size".to_string(),
-            ));
-        }
-        if text_data.len() < self.buffer_size {
-            return Err(CodeSkewError::RenderingError(
-                "Text data buffer insufficient size".to_string(),
-            ));
-        }
-
-        // Ultra-fast vectorized alpha blending with optimized integer arithmetic
-        let pixel_count = self.pixel_count;
-        let rgba_buffer = &mut self.rgba_buffer;
-
-        // Process 4 pixels at a time for better cache utilization
-        for i in 0..pixel_count {
-            let idx = i * 4;
-
-            // Load background and text color components
-            let bg_r = background_data[idx] as u32;
-            let bg_g = background_data[idx + 1] as u32;
-            let bg_b = background_data[idx + 2] as u32;
-            let bg_a = background_data[idx + 3] as u32;
-
-            let text_r = text_data[idx] as u32;
-            let text_g = text_data[idx + 1] as u32;
-            let text_b = text_data[idx + 2] as u32;
-            let text_a = text_data[idx + 3] as u32;
-
-            // Debug first few pixels
-            if i < 3 {
-                println!("🔧 DEBUG: Pixel {}: BG=({},{},{},{}), Text=({},{},{},{})", 
-                         i, bg_r, bg_g, bg_b, bg_a, text_r, text_g, text_b, text_a);
-            }
-
-            // Optimized alpha blending with pre-calculated inverse alpha
-            let inv_alpha = 255 - text_a;
-
-            // Blend each component with maximum efficiency
-            rgba_buffer[idx] = ((text_r * text_a + bg_r * inv_alpha) / 255) as u8;
-            rgba_buffer[idx + 1] = ((text_g * text_a + bg_g * inv_alpha) / 255) as u8;
-            rgba_buffer[idx + 2] = ((text_b * text_a + bg_b * inv_alpha) / 255) as u8;
-            rgba_buffer[idx + 3] = ((text_a * text_a + bg_a * inv_alpha) / 255) as u8;
-            
-            // Debug first few results
-            if i < 3 {
-                println!("🔧 DEBUG: Result {}: ({},{},{},{})", 
-                         i, rgba_buffer[idx], rgba_buffer[idx+1], rgba_buffer[idx+2], rgba_buffer[idx+3]);
-            }
-        }
-
-        // Final buffer check
-        let final_non_zero = rgba_buffer.iter().filter(|&&x| x != 0).count();
-        println!("🔧 DEBUG: Final rgba_buffer non-zero bytes: {}/{}", final_non_zero, rgba_buffer.len());
-
-        Ok(())
-    }
 
     /// Get configuration reference with zero allocation
     #[inline]
@@ -838,5 +713,519 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
         
         println!("🔤 ratagpu Glyphon text rendered to storage texture successfully!");
         Ok(())
+    }
+
+    /// Build WGSL shader using minijinja templating
+    /// This method is available for custom shader generation with layout data
+    #[allow(dead_code)]
+    fn build_templated_wgsl_shader(&mut self, layout: &[PositionedLine], shader_template: &str) -> Result<String, CodeSkewError> {
+        use minijinja::{Environment, context};
+        
+        // Create minijinja environment
+        let mut env = Environment::new();
+        
+        // Register the WGSL template from string
+        env.add_template("shader", shader_template)
+            .map_err(|e| CodeSkewError::RenderingError(format!("Template error: {}", e)))?;
+        
+        // Prepare template data from layout
+        let template_data = self.prepare_template_data(layout)?;
+        
+        // Calculate downsampling parameters for 3x size reduction
+        let downsample_factor = 3.0;
+        let downsampled_width = (self.width_u32 as f32 / downsample_factor) as u32;
+        let downsampled_height = (self.height_u32 as f32 / downsample_factor) as u32;
+        
+        // Render the template
+        let tmpl = env.get_template("shader")
+            .map_err(|e| CodeSkewError::RenderingError(format!("Template not found: {}", e)))?;
+            
+        let rendered_wgsl = tmpl.render(context! {
+            width => self.width_u32,
+            height => self.height_u32,
+            downsampled_width => downsampled_width,
+            downsampled_height => downsampled_height,
+            downsample_factor => downsample_factor,
+            fold => self.config.fold,
+            skew => self.config.skew_angle,
+            scale => self.config.scale,
+            perspective => self.config.perspective,
+            font_size => self.calculate_perspective_font_size(),
+            characters => template_data.characters,
+            colors => template_data.colors,
+            positions => template_data.positions,
+            line_count => layout.len(),
+            max_chars_per_line => template_data.max_chars_per_line,
+            // Math constants
+            PI => std::f32::consts::PI,
+            TAU => std::f32::consts::TAU,
+            E => std::f32::consts::E,
+            // Default empty code block
+            code => "",
+        }).map_err(|e| CodeSkewError::RenderingError(format!("Render error: {}", e)))?;
+        
+        Ok(rendered_wgsl)
+    }
+
+    /// Process shader template through unified MiniJinja system
+    async fn process_shader_template(&mut self, layout: &[PositionedLine]) -> Result<String, CodeSkewError> {
+        use minijinja::{Environment, context};
+        
+        // Determine shader template source
+        let (shader_template, shader_source) = if self.config.input.extension().map_or(false, |ext| ext == "wgsl") {
+            // Load WGSL file as template
+            let wgsl_content = std::fs::read_to_string(&self.config.input)
+                .map_err(|e| CodeSkewError::RenderingError(format!("Failed to read WGSL file: {e}")))?;
+            println!("🔧 Loading WGSL shader from: {}", self.config.input.display());
+            (wgsl_content, "input file".to_string())
+        } else {
+            // Load background shader as template
+            let shader_path = format!("wgsl/{}.wgsl", self.config.shader);
+            let wgsl_content = std::fs::read_to_string(&shader_path)
+                .map_err(|e| CodeSkewError::RenderingError(format!("Failed to read background shader {}: {e}", shader_path)))?;
+            println!("🔧 Loading background shader: {}", self.config.shader);
+            (wgsl_content, self.config.shader.clone())
+        };
+        
+        // Create MiniJinja environment
+        let mut env = Environment::new();
+        env.add_template("shader", &shader_template)
+            .map_err(|e| CodeSkewError::RenderingError(format!("Template error: {}", e)))?;
+        
+        // Build template context
+        let template_context = self.build_template_context(layout, &shader_source)?;
+        
+        // Render template
+        let tmpl = env.get_template("shader")
+            .map_err(|e| CodeSkewError::RenderingError(format!("Template not found: {}", e)))?;
+            
+        let rendered_wgsl = tmpl.render(template_context)
+            .map_err(|e| CodeSkewError::RenderingError(format!("Template render error: {}", e)))?;
+        
+        Ok(rendered_wgsl)
+    }
+
+    /// Build template context for MiniJinja rendering
+    fn build_template_context(&self, layout: &[PositionedLine], shader_source: &str) -> Result<minijinja::Value, CodeSkewError> {
+        use minijinja::context;
+        
+        // Generate code WGSL if input is a code file
+        let code_wgsl = if !self.config.input.extension().map_or(false, |ext| ext == "wgsl") {
+            // Generate WGSL code for text rendering
+            self.generate_text_rendering_wgsl(layout)?
+        } else {
+            // Empty code for .wgsl files
+            String::new()
+        };
+        
+        // Calculate downsampling parameters for 3x size reduction
+        let downsample_factor = 3.0;
+        let downsampled_width = (self.width_u32 as f32 / downsample_factor) as u32;
+        let downsampled_height = (self.height_u32 as f32 / downsample_factor) as u32;
+        
+        Ok(context! {
+            width => self.width_u32,
+            height => self.height_u32,
+            downsampled_width => downsampled_width,
+            downsampled_height => downsampled_height,
+            downsample_factor => downsample_factor,
+            fold => self.config.fold,
+            skew => self.config.skew_angle,
+            scale => self.config.scale,
+            perspective => self.config.perspective,
+            font_size => self.calculate_perspective_font_size(),
+            line_count => layout.len(),
+            shader_source => shader_source,
+            // Math constants
+            PI => std::f32::consts::PI,
+            TAU => std::f32::consts::TAU,
+            E => std::f32::consts::E,
+            // Template variables
+            grid_horizon => 0.4,
+            grid_nearest => 0.67,
+            vanishing_x => 0.3,
+            skew_strength => 0.4,
+            background_alpha => 1.0,
+            // Code rendering
+            code => code_wgsl,
+        })
+    }
+
+    /// Generate WGSL code for text rendering from layout data
+    fn generate_text_rendering_wgsl(&self, layout: &[PositionedLine]) -> Result<String, CodeSkewError> {
+        let mut wgsl_code = String::new();
+        
+        // Calculate downsampling parameters
+        let downsample_factor = 3.0;
+        let downsampled_width = (self.width_u32 as f32 / downsample_factor) as u32;
+        let downsampled_height = (self.height_u32 as f32 / downsample_factor) as u32;
+        
+        // Collect all characters, colors, and positions
+        let mut characters = Vec::new();
+        let mut colors = Vec::new();
+        let mut positions = Vec::new();
+        
+        for (line_idx, line) in layout.iter().enumerate() {
+            for (char_idx, styled_char) in line.chars.iter().enumerate() {
+                characters.push(styled_char.char as u32);
+                
+                // Pack color as u32 (RGBA8)
+                let color_packed = 
+                    ((styled_char.color.r as u32) << 24) |
+                    ((styled_char.color.g as u32) << 16) |
+                    ((styled_char.color.b as u32) << 8) |
+                    (255u32); // Alpha
+                colors.push(color_packed);
+                
+                // Store position with 3D perspective scaling
+                let char_x = line.x + (char_idx as f32 * self.config.fontsize * 0.6);
+                let char_y = line.y;
+                positions.push((char_x, char_y, line_idx as u32, char_idx as u32));
+            }
+        }
+        
+        let char_count = characters.len();
+        if char_count == 0 {
+            return Ok(String::new());
+        }
+        
+        // Generate WGSL constants and data structures
+        wgsl_code.push_str(&format!("// Generated text rendering code\n"));
+        wgsl_code.push_str(&format!("const CHAR_COUNT: u32 = {}u;\n\n", char_count));
+        
+        // Character data array
+        wgsl_code.push_str("const chars: array<u32, CHAR_COUNT> = array<u32, CHAR_COUNT>(\n");
+        for (i, &ch) in characters.iter().enumerate() {
+            if i > 0 { wgsl_code.push_str(", "); }
+            if i % 10 == 0 { wgsl_code.push_str("\n    "); }
+            wgsl_code.push_str(&format!("{}u", ch));
+        }
+        wgsl_code.push_str("\n);\n\n");
+        
+        // Color data array
+        wgsl_code.push_str("const colors: array<u32, CHAR_COUNT> = array<u32, CHAR_COUNT>(\n");
+        for (i, &color) in colors.iter().enumerate() {
+            if i > 0 { wgsl_code.push_str(", "); }
+            if i % 8 == 0 { wgsl_code.push_str("\n    "); }
+            wgsl_code.push_str(&format!("0x{:08x}u", color));
+        }
+        wgsl_code.push_str("\n);\n\n");
+        
+        // Position data structure and array
+        wgsl_code.push_str("struct CharPosition {\n");
+        wgsl_code.push_str("    x: f32,\n");
+        wgsl_code.push_str("    y: f32,\n");
+        wgsl_code.push_str("    line: u32,\n");
+        wgsl_code.push_str("    char_idx: u32,\n");
+        wgsl_code.push_str("}\n\n");
+        
+        wgsl_code.push_str("const positions: array<CharPosition, CHAR_COUNT> = array<CharPosition, CHAR_COUNT>(\n");
+        for (i, &(x, y, line, char_idx)) in positions.iter().enumerate() {
+            if i > 0 { wgsl_code.push_str(", "); }
+            if i % 4 == 0 { wgsl_code.push_str("\n    "); }
+            wgsl_code.push_str(&format!("CharPosition({:.1}, {:.1}, {}u, {}u)", x, y, line, char_idx));
+        }
+        wgsl_code.push_str("\n);\n\n");
+        
+        // Utility functions with simplified coordinate mapping
+        wgsl_code.push_str(r#"
+// Unpack color from u32 to float4
+fn unpack_color(packed: u32) -> float4 {
+    let r = f32((packed >> 24u) & 0xFFu) / 255.0;
+    let g = f32((packed >> 16u) & 0xFFu) / 255.0;
+    let b = f32((packed >> 8u) & 0xFFu) / 255.0;
+    let a = f32(packed & 0xFFu) / 255.0;
+    return float4(r, g, b, a);
+}
+
+// Simple UV coordinate mapping for text positioning
+fn apply_3d_perspective(pos: CharPosition, screen_uv: float2, t: float) -> float2 {
+    // Use shader's actual screen dimensions
+    let screen_size = float2(textureDimensions(screen));
+    let char_uv = float2(pos.x, pos.y) / screen_size;
+    
+    // Position text in upper area (above bandwidth graphs at y < 0.3)
+    let text_area_uv = float2(
+        char_uv.x * 0.8 + 0.1,  // Center horizontally with margins
+        char_uv.y * 0.25 + 0.05  // Upper area of screen
+    );
+    
+    return text_area_uv;
+}
+"#);
+        
+        
+        // Optimized character rendering for visibility
+        wgsl_code.push_str(r#"
+// Complete 5x7 bitmap font for programming characters
+fn get_char_pattern(char_code: u32, pixel_x: u32, pixel_y: u32) -> bool {
+    switch char_code {
+        // Common programming symbols (prioritized)
+        case 123u: { // '{'
+            return (pixel_x == 1u && (pixel_y == 6u || pixel_y == 0u)) ||
+                   (pixel_x == 2u && (pixel_y >= 1u && pixel_y <= 2u || pixel_y >= 4u && pixel_y <= 5u)) ||
+                   (pixel_x == 0u && pixel_y == 3u);
+        }
+        case 125u: { // '}'
+            return (pixel_x == 3u && (pixel_y == 6u || pixel_y == 0u)) ||
+                   (pixel_x == 2u && (pixel_y >= 1u && pixel_y <= 2u || pixel_y >= 4u && pixel_y <= 5u)) ||
+                   (pixel_x == 4u && pixel_y == 3u);
+        }
+        case 40u: { // '('
+            return (pixel_x == 2u && (pixel_y == 6u || pixel_y == 0u)) ||
+                   (pixel_x == 1u && (pixel_y >= 1u && pixel_y <= 5u));
+        }
+        case 41u: { // ')'
+            return (pixel_x == 2u && (pixel_y == 6u || pixel_y == 0u)) ||
+                   (pixel_x == 3u && (pixel_y >= 1u && pixel_y <= 5u));
+        }
+        case 91u: { // '['
+            return (pixel_x == 1u) || (pixel_x == 2u && (pixel_y == 6u || pixel_y == 0u));
+        }
+        case 93u: { // ']'
+            return (pixel_x == 3u) || (pixel_x == 2u && (pixel_y == 6u || pixel_y == 0u));
+        }
+        case 61u: { // '='
+            return (pixel_y == 2u || pixel_y == 4u) && (pixel_x >= 1u && pixel_x <= 3u);
+        }
+        case 59u: { // ';'
+            return (pixel_x == 2u && pixel_y == 3u) || (pixel_x == 2u && pixel_y == 1u) || (pixel_x == 1u && pixel_y == 0u);
+        }
+        case 58u: { // ':'
+            return pixel_x == 2u && (pixel_y == 1u || pixel_y == 4u);
+        }
+        
+        // Numbers 0-9
+        case 48u: { // '0'
+            return (pixel_x == 0u || pixel_x == 4u) && (pixel_y >= 1u && pixel_y <= 5u) ||
+                   (pixel_y == 0u || pixel_y == 6u) && (pixel_x >= 1u && pixel_x <= 3u);
+        }
+        case 49u: { // '1'
+            return pixel_x == 2u || (pixel_x == 1u && pixel_y == 6u) || (pixel_y == 0u && pixel_x >= 1u && pixel_x <= 3u);
+        }
+        case 50u: { // '2'
+            return (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
+                   (pixel_x == 4u && pixel_y >= 4u && pixel_y <= 5u) || (pixel_x == 0u && pixel_y >= 1u && pixel_y <= 2u);
+        }
+        case 51u: { // '3'
+            return (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
+                   pixel_x == 4u && (pixel_y == 1u || pixel_y == 2u || pixel_y == 4u || pixel_y == 5u);
+        }
+        case 52u: { // '4'
+            return pixel_x == 4u || (pixel_y == 3u && pixel_x <= 3u) || (pixel_x == 0u && pixel_y >= 4u);
+        }
+        case 53u: { // '5'
+            return (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
+                   (pixel_x == 0u && pixel_y >= 4u) || (pixel_x == 4u && pixel_y >= 1u && pixel_y <= 2u);
+        }
+        case 54u: { // '6'
+            return (pixel_x == 0u && pixel_y >= 1u) || (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
+                   (pixel_x == 4u && pixel_y >= 1u && pixel_y <= 2u);
+        }
+        case 55u: { // '7'
+            return (pixel_y == 6u && pixel_x >= 1u && pixel_x <= 4u) || (pixel_x == 3u && pixel_y >= 3u && pixel_y <= 5u) ||
+                   (pixel_x == 2u && pixel_y >= 1u && pixel_y <= 2u);
+        }
+        case 56u: { // '8'
+            return (pixel_x == 0u || pixel_x == 4u) && (pixel_y == 1u || pixel_y == 2u || pixel_y == 4u || pixel_y == 5u) ||
+                   (pixel_y == 0u || pixel_y == 3u || pixel_y == 6u) && (pixel_x >= 1u && pixel_x <= 3u);
+        }
+        case 57u: { // '9'
+            return (pixel_x == 4u && pixel_y <= 5u) || (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
+                   (pixel_x == 0u && pixel_y >= 4u && pixel_y <= 5u);
+        }
+        
+        // Lowercase letters (common in code)
+        case 97u: { // 'a'
+            return (pixel_y <= 2u && pixel_x >= 1u && pixel_x <= 3u) ||
+                   (pixel_x == 4u && pixel_y <= 2u) || (pixel_x == 0u && pixel_y == 1u);
+        }
+        case 101u: { // 'e'
+            return (pixel_y == 2u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
+                   (pixel_x == 0u && pixel_y == 1u) || (pixel_x == 4u && pixel_y == 3u);
+        }
+        case 102u: { // 'f'
+            return pixel_x == 1u || (pixel_y == 5u && pixel_x == 2u) || (pixel_y == 3u && pixel_x <= 2u);
+        }
+        case 105u: { // 'i'
+            return pixel_x == 2u && pixel_y <= 2u || pixel_x == 2u && pixel_y == 4u;
+        }
+        case 108u: { // 'l'
+            return pixel_x == 2u;
+        }
+        case 110u: { // 'n'
+            return pixel_x == 0u && pixel_y <= 2u || (pixel_y == 3u && pixel_x >= 1u && pixel_x <= 3u) ||
+                   pixel_x == 4u && pixel_y <= 2u;
+        }
+        case 111u: { // 'o'
+            return (pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
+                   (pixel_x == 0u || pixel_x == 4u) && (pixel_y == 1u || pixel_y == 2u);
+        }
+        case 114u: { // 'r'
+            return pixel_x == 0u && pixel_y <= 2u || (pixel_y == 3u && pixel_x >= 1u && pixel_x <= 2u);
+        }
+        case 115u: { // 's'
+            return (pixel_y == 3u || pixel_y == 1u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
+                   (pixel_x == 0u && pixel_y == 2u) || (pixel_x == 4u && pixel_y == 1u);
+        }
+        case 116u: { // 't'
+            return pixel_x == 1u && pixel_y <= 3u || (pixel_y == 4u && pixel_x <= 2u) || (pixel_y == 0u && pixel_x >= 1u && pixel_x <= 2u);
+        }
+        case 117u: { // 'u'
+            return (pixel_x == 0u || pixel_x == 4u) && pixel_y <= 2u || (pixel_y == 0u && pixel_x >= 1u && pixel_x <= 3u);
+        }
+        
+        // Uppercase letters (common in types)
+        case 65u: { // 'A'
+            return (pixel_x == 0u || pixel_x == 4u) && pixel_y <= 5u ||
+                   (pixel_y == 6u || pixel_y == 3u) && (pixel_x >= 1u && pixel_x <= 3u);
+        }
+        case 83u: { // 'S'
+            return (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
+                   (pixel_x == 0u && (pixel_y == 5u || pixel_y == 4u)) || (pixel_x == 4u && (pixel_y == 2u || pixel_y == 1u));
+        }
+        
+        // Special characters
+        case 32u: { return false; } // space
+        case 46u: { // '.'
+            return pixel_x == 2u && pixel_y == 0u;
+        }
+        case 44u: { // ','
+            return pixel_x == 2u && pixel_y == 0u; // Simplified comma pattern
+        }
+        case 39u: { // apostrophe '''
+            return pixel_x == 2u && pixel_y >= 5u;
+        }
+        case 34u: { // quote '"'
+            return (pixel_x == 1u || pixel_x == 3u) && pixel_y >= 5u;
+        }
+        case 95u: { // '_'
+            return pixel_y == 0u && pixel_x >= 1u && pixel_x <= 3u;
+        }
+        case 45u: { // '-'
+            return pixel_y == 3u && pixel_x >= 1u && pixel_x <= 3u;
+        }
+        case 43u: { // '+'
+            return (pixel_x == 2u && pixel_y >= 2u && pixel_y <= 4u) || (pixel_y == 3u && pixel_x >= 1u && pixel_x <= 3u);
+        }
+        case 42u: { // '*'
+            return pixel_x == 2u && pixel_y == 3u || (pixel_x == 1u || pixel_x == 3u) && (pixel_y == 2u || pixel_y == 4u);
+        }
+        case 47u: { // '/'
+            return (pixel_x == 4u && pixel_y >= 4u) || (pixel_x == 3u && pixel_y == 3u) ||
+                   (pixel_x == 2u && pixel_y == 2u) || (pixel_x == 1u && pixel_y == 1u) || (pixel_x == 0u && pixel_y <= 1u);
+        }
+        case 92u: { // '\'
+            return (pixel_x == 0u && pixel_y >= 4u) || (pixel_x == 1u && pixel_y == 3u) ||
+                   (pixel_x == 2u && pixel_y == 2u) || (pixel_x == 3u && pixel_y == 1u) || (pixel_x == 4u && pixel_y <= 1u);
+        }
+        case 60u: { // '<'
+            return (pixel_x == 3u && (pixel_y == 1u || pixel_y == 5u)) || (pixel_x == 2u && (pixel_y == 2u || pixel_y == 4u)) ||
+                   (pixel_x == 1u && pixel_y == 3u);
+        }
+        case 62u: { // '>'
+            return (pixel_x == 1u && (pixel_y == 1u || pixel_y == 5u)) || (pixel_x == 2u && (pixel_y == 2u || pixel_y == 4u)) ||
+                   (pixel_x == 3u && pixel_y == 3u);
+        }
+        case 33u: { // '!'
+            return pixel_x == 2u && (pixel_y >= 2u || pixel_y == 0u);
+        }
+        case 63u: { // '?'
+            return (pixel_y == 6u && pixel_x >= 1u && pixel_x <= 3u) || (pixel_x == 4u && pixel_y >= 4u && pixel_y <= 5u) ||
+                   (pixel_y == 3u && pixel_x >= 2u && pixel_x <= 3u) || (pixel_x == 2u && pixel_y == 0u);
+        }
+        case 35u: { // '#'
+            return (pixel_x == 1u || pixel_x == 3u) || (pixel_y == 2u || pixel_y == 4u);
+        }
+        case 38u: { // '&'
+            return (pixel_y == 6u && pixel_x >= 1u && pixel_x <= 2u) || (pixel_x == 0u && (pixel_y == 5u || pixel_y == 3u || pixel_y == 1u)) ||
+                   (pixel_y == 2u && pixel_x == 1u) || (pixel_x == 3u && pixel_y <= 1u) || (pixel_y == 0u && pixel_x == 4u);
+        }
+        case 124u: { // '|'
+            return pixel_x == 2u;
+        }
+        
+        default: { // Fallback pattern for unimplemented characters
+            return (pixel_x == 0u || pixel_x == 4u || pixel_y == 0u || pixel_y == 6u) && 
+                   !((pixel_x == 0u || pixel_x == 4u) && (pixel_y == 0u || pixel_y == 6u));
+        }
+    }
+}
+
+// Render a single character using simple bitmap font
+fn render_character(char_code: u32, world_pos: float2, color: float4, screen_uv: float2, t: float) -> float4 {
+    let char_size = float2(0.010, 0.014); // Character size in UV space
+    let char_uv = screen_uv - world_pos;
+    
+    // Check if we're within character bounds
+    if (abs(char_uv.x) < char_size.x && abs(char_uv.y) < char_size.y) {
+        // Convert to pixel coordinates within 5x7 grid
+        let pixel_x = u32((char_uv.x + char_size.x) / (2.0 * char_size.x) * 5.0);
+        let pixel_y = u32((char_uv.y + char_size.y) / (2.0 * char_size.y) * 7.0);
+        
+        if (pixel_x < 5u && pixel_y < 7u && get_char_pattern(char_code, pixel_x, pixel_y)) {
+            return float4(0.0, 1.0, 1.0, 0.9); // Bright cyan for visible pixels
+        }
+    }
+    
+    return float4(0.0);
+}
+
+// Main text rendering function
+fn render_text_layer(uv: float2, t: float) -> float4 {
+    var text_color = float4(0.0);
+    
+    for (var i = 0u; i < CHAR_COUNT; i++) {
+        let char_pos = apply_3d_perspective(positions[i], uv, t);
+        let char_color = unpack_color(colors[i]);
+        text_color += render_character(chars[i], char_pos, char_color, uv, t);
+    }
+    
+    return text_color;
+}
+"#);
+        
+        Ok(wgsl_code)
+    }
+    
+    /// Prepare layout data for template
+    fn prepare_template_data(&self, layout: &[PositionedLine]) -> Result<TemplateData, CodeSkewError> {
+        let mut characters = Vec::new();
+        let mut colors = Vec::new();
+        let mut positions = Vec::new();
+        let mut max_chars_per_line = 0;
+        
+        for (line_idx, line) in layout.iter().enumerate() {
+            max_chars_per_line = max_chars_per_line.max(line.chars.len());
+            
+            for (char_idx, styled_char) in line.chars.iter().enumerate() {
+                // Encode character as u32 for WGSL
+                characters.push(styled_char.char as u32);
+                
+                // Pack color as u32 (RGBA8)
+                let color_packed = 
+                    ((styled_char.color.r as u32) << 24) |
+                    ((styled_char.color.g as u32) << 16) |
+                    ((styled_char.color.b as u32) << 8) |
+                    (255u32); // Alpha
+                colors.push(color_packed);
+                
+                // Store position data
+                positions.push(PositionData {
+                    line_idx,
+                    char_idx,
+                    x: line.x + (char_idx as f32 * self.config.fontsize * 0.6),
+                    y: line.y,
+                    scale: line.scale,
+                });
+            }
+        }
+        
+        Ok(TemplateData {
+            characters,
+            colors,
+            positions,
+            max_chars_per_line,
+        })
     }
 }

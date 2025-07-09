@@ -121,12 +121,12 @@ impl WgpuToyRenderer {
             });
 
             self.compute_pipelines.push(ComputePipeline {
-                _name: entry_point,
+                _name: entry_point.clone(),
                 pipeline: compute_pipeline,
                 workgroup_size,
-                workgroup_count: None,
-                _dispatch_once: false,
-                _dispatch_count: 1,
+                workgroup_count: source.workgroup_count.get(&entry_point).cloned(),
+                _dispatch_once: *source.dispatch_once.get(&entry_point).unwrap_or(&false),
+                _dispatch_count: *source.dispatch_count.get(&entry_point).unwrap_or(&1),
             });
         }
 
@@ -163,11 +163,21 @@ struct Mouse { pos: uint2, click: int }
 struct DispatchInfo { id: uint }
 "#);
 
-        // Custom struct (simplified for now)
-        s.push_str("struct Custom { _dummy: float };\n");
+        // Custom struct (dynamic generation)
+        s.push_str("struct Custom {\n");
+        let (custom_names, _) = &self.bindings.custom.host;
+        for name in custom_names {
+            s.push_str(&format!("    {}: float,\n", name));
+        }
+        s.push_str("};\n");
 
-        // Data struct (simplified for now)
-        s.push_str("struct Data { _dummy: array<u32,1> };\n");
+        // Data struct (dynamic generation)
+        s.push_str("struct Data {\n");
+        for (key, val) in self.bindings.user_data.host.iter() {
+            let n = val.len();
+            s.push_str(&format!("    {}: array<u32,{}>,\n", key, n));
+        }
+        s.push_str("};\n");
 
         // All binding declarations
         s.push_str(&self.bindings.to_wgsl());
@@ -176,6 +186,24 @@ struct DispatchInfo { id: uint }
         s.push_str(r#"
 fn keyDown(keycode: uint) -> bool {
     return ((_keyboard[keycode / 128u][(keycode % 128u) / 32u] >> (keycode % 32u)) & 1u) == 1u;
+}
+
+fn assert(index: int, success: bool) {
+    if (!success) {
+        atomicAdd(&_assert_counts[index], 1u);
+    }
+}
+
+fn passStore(pass_index: int, coord: int2, value: float4) {
+    textureStore(pass_out, coord, pass_index, value);
+}
+
+fn passLoad(pass_index: int, coord: int2, lod: int) -> float4 {
+    return textureLoad(pass_in, coord, pass_index, lod);
+}
+
+fn passSampleLevelBilinearRepeat(pass_index: int, uv: float2, lod: float) -> float4 {
+    return textureSampleLevel(pass_in, bilinear_repeat, fract(uv), pass_index, lod);
 }
 "#);
 

@@ -99,7 +99,7 @@ pub struct Cli {
     pub fps: f32,
 
     /// Background shader for the composite renderer
-    #[arg(long, default_value = "zeroshot_original")]
+    #[arg(long, default_value = "bandwidth")]
     pub shader: String,
 
     /// Launch live animated preview window (shorthand for --format wgpu)

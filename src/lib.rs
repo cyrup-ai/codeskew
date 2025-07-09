@@ -28,7 +28,7 @@ pub use highlight::{SpanStyle, StyledLine, StyledSpan, SyntaxHighlighter};
 pub use layout::{LayoutEngine, PositionedLine};
 pub use output::OutputGenerator;
 pub use toy::*;
-pub use webgpu::EliteWebGPURenderer;
+// webgpu utilities available if needed
 
 /// Process a code file with gorgeous WebGPU rendering
 ///

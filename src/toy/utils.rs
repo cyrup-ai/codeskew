@@ -45,8 +45,15 @@ pub async fn fetch_include(name: String) -> Option<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn fetch_include(name: String) -> Option<String> {
-    let filename = format!("./include/{name}.wgsl");
-    std::fs::read_to_string(filename).ok()
+    // Try local include directory first
+    let local_path = format!("src/toy/include/{name}.wgsl");
+    if let Ok(content) = std::fs::read_to_string(&local_path) {
+        return Some(content);
+    }
+    
+    // Fall back to legacy path
+    let fallback_path = format!("./include/{name}.wgsl");
+    std::fs::read_to_string(fallback_path).ok()
 }
 
 #[cfg(target_arch = "wasm32")]

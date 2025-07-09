@@ -77,7 +77,18 @@ impl SyntaxHighlighter {
 
     /// Get the syntax for a file extension
     fn get_syntax_for_extension(&self, extension: &str) -> Option<&SyntaxReference> {
-        self.syntax_set.find_syntax_by_extension(extension)
+        // Special handling for WGSL files - map to GLSL syntax since they're similar
+        match extension.to_lowercase().as_str() {
+            "wgsl" => {
+                // Try GLSL first as it's most similar to WGSL
+                self.syntax_set.find_syntax_by_extension("glsl")
+                    .or_else(|| self.syntax_set.find_syntax_by_extension("frag"))
+                    .or_else(|| self.syntax_set.find_syntax_by_extension("vert"))
+                    // Fallback to C if GLSL isn't available
+                    .or_else(|| self.syntax_set.find_syntax_by_extension("c"))
+            }
+            _ => self.syntax_set.find_syntax_by_extension(extension)
+        }
     }
 
     /// Convert a syntect Style to our SpanStyle

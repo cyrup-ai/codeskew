@@ -8,6 +8,7 @@ use lazy_regex::*;
 use rustc_hash::FxHashMap;
 use std::borrow::Cow;
 use wasm_bindgen::prelude::*;
+use minijinja::{Environment, Value};
 
 #[wasm_bindgen]
 extern "C" {
@@ -442,12 +443,63 @@ impl Preprocessor {
     }
 
     pub async fn run(&mut self, shader: &str) -> Option<SourceMap> {
-        match self.preprocess(shader).await {
+        // Process MiniJinja templates first if shader contains template syntax
+        let processed_shader = if shader.contains("{%") || shader.contains("{{") {
+            match self.process_jinja_template(shader) {
+                Ok(rendered) => rendered,
+                Err(e) => {
+                    WGSLError::new(format!("Jinja template error: {}", e), 1).submit();
+                    return None;
+                }
+            }
+        } else {
+            shader.to_string()
+        };
+
+        match self.preprocess(&processed_shader).await {
             Ok(()) => Some(std::mem::take(&mut self.source)),
             Err(e) => {
                 e.submit();
                 None
             }
         }
+    }
+
+    /// Process MiniJinja template with WGSL-specific context
+    fn process_jinja_template(&self, template_str: &str) -> Result<String, minijinja::Error> {
+        let mut env = Environment::new();
+        
+        // Add built-in functions and filters
+        env.add_function("range", |start: i32, end: i32| -> Vec<i32> {
+            (start..end).collect()
+        });
+        
+        env.add_function("pow", |base: f64, exp: f64| -> f64 {
+            base.powf(exp)
+        });
+        
+        // Add template
+        env.add_template("shader", template_str)?;
+        
+        // Create context with shader-specific variables
+        let mut context = rustc_hash::FxHashMap::default();
+        
+        // Add all preprocessor defines to template context
+        for (key, value) in &self.defines {
+            context.insert(key.clone(), Value::from(value.clone()));
+        }
+        
+        // Add WGSL-specific constants
+        context.insert("PI".to_string(), Value::from(std::f64::consts::PI));
+        context.insert("TAU".to_string(), Value::from(std::f64::consts::TAU));
+        context.insert("E".to_string(), Value::from(std::f64::consts::E));
+        
+        // Add utility values
+        context.insert("MAX_WORKGROUP_SIZE".to_string(), Value::from(256));
+        context.insert("MAX_TEXTURE_SIZE".to_string(), Value::from(8192));
+        
+        // Render template
+        let tmpl = env.get_template("shader")?;
+        tmpl.render(context)
     }
 }
