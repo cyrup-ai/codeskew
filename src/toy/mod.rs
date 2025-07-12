@@ -35,7 +35,8 @@ pub struct WgpuToyRenderer {
     pub wgpu: WgpuContext,
     screen_width: u32,
     screen_height: u32,
-    bindings: bind::Bindings,
+    #[wasm_bindgen(skip)]
+    pub bindings: bind::Bindings,
     compute_pipeline_layout: wgpu::PipelineLayout,
     _last_compute_pipelines: Option<Vec<ComputePipeline>>,
     compute_pipelines: Vec<ComputePipeline>,

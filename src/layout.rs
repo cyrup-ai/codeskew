@@ -74,9 +74,9 @@ impl LayoutEngine {
         // Use the tighter constraint so we satisfy both axes.
         let mut base_font_size = font_by_height.min(font_by_width);
 
-        // Keep font size within sane limits
+        // Keep font size within sane limits - increased minimum for 3D perspective visibility
         base_font_size = base_font_size
-            .max(8.0) // readability
+            .max(24.0) // Much larger minimum for 3D perspective readability
             .min(self.config.fontsize * 10.0);
             
         base_font_size

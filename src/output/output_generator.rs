@@ -12,6 +12,8 @@ use image::RgbaImage;
 use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use crate::glyphon::GlyphonTextureRenderer;
+use crate::nerdfont;
+use crate::glyphon::font_system::create_font_system_with_nerd_font;
 
 /// Shader metadata structure matching wgpu-compute-toy JSON format
 #[derive(Debug, Deserialize, Serialize)]
@@ -143,7 +145,7 @@ impl OutputGenerator {
             })?;
         
         // Render with toy renderer (optionally with text if shader supports it)
-        let buffer_data = self.render_with_toy(wgpu_context).await?;
+        let buffer_data = self.render_with_toy(wgpu_context, &layout).await?;
         
         // Convert buffer to image
         let image = RgbaImage::from_raw(
@@ -186,9 +188,13 @@ impl OutputGenerator {
     async fn render_with_toy(
         &mut self,
         wgpu_context: crate::toy::WgpuContext,
+        layout: &[PositionedLine],
     ) -> Result<Vec<u8>, CodeSkewError> {
         println!("🔧 DEBUG: Starting toy renderer");
         let mut toy_renderer = WgpuToyRenderer::new(wgpu_context);
+
+        // Render text using glyphon texture renderer
+        self.render_glyphon_to_texture(&mut toy_renderer, layout).await?;
 
         // Load actual texture file into channel0
         if let Err(e) = self.load_shader_textures(&mut toy_renderer, &self.config.shader).await {
@@ -205,13 +211,12 @@ impl OutputGenerator {
             println!("🔧 DEBUG: Successfully loaded shader textures");
         }
 
-        // Build optimized background shader with zero allocation string building
-        self.shader_buffer.clear();
-        self.build_background_shader();
-        println!("🔧 DEBUG: Built shader, length: {}", self.shader_buffer.len());
+        // Process shader through unified MiniJinja template system
+        let rendered_wgsl = self.process_shader_template(layout).await?;
+        println!("🔧 DEBUG: Built unified shader, length: {}", rendered_wgsl.len());
 
         // Compile shader with efficient error handling
-        if let Some(source_map) = toy_renderer.preprocess_async(&self.shader_buffer).await {
+        if let Some(source_map) = toy_renderer.preprocess_async(&rendered_wgsl).await {
             println!("🔧 DEBUG: Shader preprocessing successful");
             toy_renderer.compile(source_map);
             println!("🔧 DEBUG: Shader compilation successful");
@@ -292,6 +297,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
             .map_err(|e| CodeSkewError::RenderingError(format!("Failed to create WGPU context: {e}")))?;
         
         let mut wgputoy = crate::toy::WgpuToyRenderer::new(wgpu_context);
+
+        // Render text using glyphon texture renderer
+        self.render_glyphon_to_texture(&mut wgputoy, layout).await?;
 
         // Process all shaders through unified MiniJinja template system
         let rendered_wgsl = self.process_shader_template(layout).await?;
@@ -673,9 +681,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
         let char_width_ratio = 0.6;
         let calculated_font_size = effective_width / (target_chars * char_width_ratio);
         
-        // Apply bounds with minimum based on 400px window assumption
-        let min_font_size = (400.0 / target_chars * char_width_ratio).max(8.0);
-        let max_font_size = 48.0;
+        // Apply bounds with minimum based on 400px window assumption - increased for 3D perspective
+        let min_font_size = (400.0 / target_chars * char_width_ratio).max(24.0); // Much larger minimum for 3D perspective visibility
+        let max_font_size = 96.0; // Allow larger fonts for better 3D readability
         
         calculated_font_size.clamp(min_font_size, max_font_size)
     }
@@ -769,7 +777,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
 
     /// Process shader template through unified MiniJinja system
     async fn process_shader_template(&mut self, layout: &[PositionedLine]) -> Result<String, CodeSkewError> {
-        use minijinja::{Environment, context};
+        use minijinja::Environment;
         
         // Determine shader template source
         let (shader_template, shader_source) = if self.config.input.extension().map_or(false, |ext| ext == "wgsl") {
@@ -809,12 +817,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
     fn build_template_context(&self, layout: &[PositionedLine], shader_source: &str) -> Result<minijinja::Value, CodeSkewError> {
         use minijinja::context;
         
-        // Generate code WGSL if input is a code file
-        let code_wgsl = if !self.config.input.extension().map_or(false, |ext| ext == "wgsl") {
+        // Generate WGSL text rendering code when we have layout data
+        let code_wgsl = if !layout.is_empty() {
             // Generate WGSL code for text rendering
             self.generate_text_rendering_wgsl(layout)?
         } else {
-            // Empty code for .wgsl files
+            // Empty code when no text to render
             String::new()
         };
         
@@ -938,250 +946,85 @@ fn unpack_color(packed: u32) -> float4 {
     return float4(r, g, b, a);
 }
 
-// Simple UV coordinate mapping for text positioning
+// 3D perspective transformation matching bandwidth shader's grid system
 fn apply_3d_perspective(pos: CharPosition, screen_uv: float2, t: float) -> float2 {
     // Use shader's actual screen dimensions
     let screen_size = float2(textureDimensions(screen));
     let char_uv = float2(pos.x, pos.y) / screen_size;
     
-    // Position text in upper area (above bandwidth graphs at y < 0.3)
-    let text_area_uv = float2(
-        char_uv.x * 0.8 + 0.1,  // Center horizontally with margins
-        char_uv.y * 0.25 + 0.05  // Upper area of screen
-    );
+    // Match bandwidth shader's grid perspective system
+    let vanishing_x = 0.3;      // Same as bandwidth shader
+    let skew_strength = 0.4;    // Same as bandwidth shader
+    let grid_horizon = 0.4;     // Grid horizon line
+    let grid_nearest = 0.67;    // Nearest grid point
     
-    return text_area_uv;
+    // Position text in upper area (above grid horizon at y < 0.4)
+    let text_y = clamp(char_uv.y * 0.25 + 0.05, 0.05, 0.35);  // Ensure text stays in upper area: 0.05 to 0.35
+    
+    // Calculate depth based on Y position relative to grid system
+    let normalized_y = (text_y - 0.05) / 0.25;  // 0.0 = top, 1.0 = bottom
+    let z_depth = 1.0 / (normalized_y * 0.5 + 0.1);  // Perspective depth
+    
+    // Apply skew based on depth (farther = more skew toward vanishing point)
+    let base_x = char_uv.x * 0.8 + 0.1;  // Center horizontally with margins
+    let depth_factor = 1.0 - (1.0 / z_depth);  // 0.0 = near, approaching 1.0 = far
+    let x_offset = (vanishing_x - base_x) * depth_factor * skew_strength;
+    let skewed_x = clamp(base_x + x_offset, 0.02, 0.98);  // Ensure text stays within screen bounds
+    
+    return float2(skewed_x, text_y);
 }
 "#);
         
         
-        // Optimized character rendering for visibility
+        // Text rendering using glyphon texture from channel1
         wgsl_code.push_str(r#"
-// Complete 5x7 bitmap font for programming characters
-fn get_char_pattern(char_code: u32, pixel_x: u32, pixel_y: u32) -> bool {
-    switch char_code {
-        // Common programming symbols (prioritized)
-        case 123u: { // '{'
-            return (pixel_x == 1u && (pixel_y == 6u || pixel_y == 0u)) ||
-                   (pixel_x == 2u && (pixel_y >= 1u && pixel_y <= 2u || pixel_y >= 4u && pixel_y <= 5u)) ||
-                   (pixel_x == 0u && pixel_y == 3u);
-        }
-        case 125u: { // '}'
-            return (pixel_x == 3u && (pixel_y == 6u || pixel_y == 0u)) ||
-                   (pixel_x == 2u && (pixel_y >= 1u && pixel_y <= 2u || pixel_y >= 4u && pixel_y <= 5u)) ||
-                   (pixel_x == 4u && pixel_y == 3u);
-        }
-        case 40u: { // '('
-            return (pixel_x == 2u && (pixel_y == 6u || pixel_y == 0u)) ||
-                   (pixel_x == 1u && (pixel_y >= 1u && pixel_y <= 5u));
-        }
-        case 41u: { // ')'
-            return (pixel_x == 2u && (pixel_y == 6u || pixel_y == 0u)) ||
-                   (pixel_x == 3u && (pixel_y >= 1u && pixel_y <= 5u));
-        }
-        case 91u: { // '['
-            return (pixel_x == 1u) || (pixel_x == 2u && (pixel_y == 6u || pixel_y == 0u));
-        }
-        case 93u: { // ']'
-            return (pixel_x == 3u) || (pixel_x == 2u && (pixel_y == 6u || pixel_y == 0u));
-        }
-        case 61u: { // '='
-            return (pixel_y == 2u || pixel_y == 4u) && (pixel_x >= 1u && pixel_x <= 3u);
-        }
-        case 59u: { // ';'
-            return (pixel_x == 2u && pixel_y == 3u) || (pixel_x == 2u && pixel_y == 1u) || (pixel_x == 1u && pixel_y == 0u);
-        }
-        case 58u: { // ':'
-            return pixel_x == 2u && (pixel_y == 1u || pixel_y == 4u);
-        }
-        
-        // Numbers 0-9
-        case 48u: { // '0'
-            return (pixel_x == 0u || pixel_x == 4u) && (pixel_y >= 1u && pixel_y <= 5u) ||
-                   (pixel_y == 0u || pixel_y == 6u) && (pixel_x >= 1u && pixel_x <= 3u);
-        }
-        case 49u: { // '1'
-            return pixel_x == 2u || (pixel_x == 1u && pixel_y == 6u) || (pixel_y == 0u && pixel_x >= 1u && pixel_x <= 3u);
-        }
-        case 50u: { // '2'
-            return (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
-                   (pixel_x == 4u && pixel_y >= 4u && pixel_y <= 5u) || (pixel_x == 0u && pixel_y >= 1u && pixel_y <= 2u);
-        }
-        case 51u: { // '3'
-            return (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
-                   pixel_x == 4u && (pixel_y == 1u || pixel_y == 2u || pixel_y == 4u || pixel_y == 5u);
-        }
-        case 52u: { // '4'
-            return pixel_x == 4u || (pixel_y == 3u && pixel_x <= 3u) || (pixel_x == 0u && pixel_y >= 4u);
-        }
-        case 53u: { // '5'
-            return (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
-                   (pixel_x == 0u && pixel_y >= 4u) || (pixel_x == 4u && pixel_y >= 1u && pixel_y <= 2u);
-        }
-        case 54u: { // '6'
-            return (pixel_x == 0u && pixel_y >= 1u) || (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
-                   (pixel_x == 4u && pixel_y >= 1u && pixel_y <= 2u);
-        }
-        case 55u: { // '7'
-            return (pixel_y == 6u && pixel_x >= 1u && pixel_x <= 4u) || (pixel_x == 3u && pixel_y >= 3u && pixel_y <= 5u) ||
-                   (pixel_x == 2u && pixel_y >= 1u && pixel_y <= 2u);
-        }
-        case 56u: { // '8'
-            return (pixel_x == 0u || pixel_x == 4u) && (pixel_y == 1u || pixel_y == 2u || pixel_y == 4u || pixel_y == 5u) ||
-                   (pixel_y == 0u || pixel_y == 3u || pixel_y == 6u) && (pixel_x >= 1u && pixel_x <= 3u);
-        }
-        case 57u: { // '9'
-            return (pixel_x == 4u && pixel_y <= 5u) || (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
-                   (pixel_x == 0u && pixel_y >= 4u && pixel_y <= 5u);
-        }
-        
-        // Lowercase letters (common in code)
-        case 97u: { // 'a'
-            return (pixel_y <= 2u && pixel_x >= 1u && pixel_x <= 3u) ||
-                   (pixel_x == 4u && pixel_y <= 2u) || (pixel_x == 0u && pixel_y == 1u);
-        }
-        case 101u: { // 'e'
-            return (pixel_y == 2u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
-                   (pixel_x == 0u && pixel_y == 1u) || (pixel_x == 4u && pixel_y == 3u);
-        }
-        case 102u: { // 'f'
-            return pixel_x == 1u || (pixel_y == 5u && pixel_x == 2u) || (pixel_y == 3u && pixel_x <= 2u);
-        }
-        case 105u: { // 'i'
-            return pixel_x == 2u && pixel_y <= 2u || pixel_x == 2u && pixel_y == 4u;
-        }
-        case 108u: { // 'l'
-            return pixel_x == 2u;
-        }
-        case 110u: { // 'n'
-            return pixel_x == 0u && pixel_y <= 2u || (pixel_y == 3u && pixel_x >= 1u && pixel_x <= 3u) ||
-                   pixel_x == 4u && pixel_y <= 2u;
-        }
-        case 111u: { // 'o'
-            return (pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
-                   (pixel_x == 0u || pixel_x == 4u) && (pixel_y == 1u || pixel_y == 2u);
-        }
-        case 114u: { // 'r'
-            return pixel_x == 0u && pixel_y <= 2u || (pixel_y == 3u && pixel_x >= 1u && pixel_x <= 2u);
-        }
-        case 115u: { // 's'
-            return (pixel_y == 3u || pixel_y == 1u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
-                   (pixel_x == 0u && pixel_y == 2u) || (pixel_x == 4u && pixel_y == 1u);
-        }
-        case 116u: { // 't'
-            return pixel_x == 1u && pixel_y <= 3u || (pixel_y == 4u && pixel_x <= 2u) || (pixel_y == 0u && pixel_x >= 1u && pixel_x <= 2u);
-        }
-        case 117u: { // 'u'
-            return (pixel_x == 0u || pixel_x == 4u) && pixel_y <= 2u || (pixel_y == 0u && pixel_x >= 1u && pixel_x <= 3u);
-        }
-        
-        // Uppercase letters (common in types)
-        case 65u: { // 'A'
-            return (pixel_x == 0u || pixel_x == 4u) && pixel_y <= 5u ||
-                   (pixel_y == 6u || pixel_y == 3u) && (pixel_x >= 1u && pixel_x <= 3u);
-        }
-        case 83u: { // 'S'
-            return (pixel_y == 6u || pixel_y == 3u || pixel_y == 0u) && (pixel_x >= 1u && pixel_x <= 3u) ||
-                   (pixel_x == 0u && (pixel_y == 5u || pixel_y == 4u)) || (pixel_x == 4u && (pixel_y == 2u || pixel_y == 1u));
-        }
-        
-        // Special characters
-        case 32u: { return false; } // space
-        case 46u: { // '.'
-            return pixel_x == 2u && pixel_y == 0u;
-        }
-        case 44u: { // ','
-            return pixel_x == 2u && pixel_y == 0u; // Simplified comma pattern
-        }
-        case 39u: { // apostrophe '''
-            return pixel_x == 2u && pixel_y >= 5u;
-        }
-        case 34u: { // quote '"'
-            return (pixel_x == 1u || pixel_x == 3u) && pixel_y >= 5u;
-        }
-        case 95u: { // '_'
-            return pixel_y == 0u && pixel_x >= 1u && pixel_x <= 3u;
-        }
-        case 45u: { // '-'
-            return pixel_y == 3u && pixel_x >= 1u && pixel_x <= 3u;
-        }
-        case 43u: { // '+'
-            return (pixel_x == 2u && pixel_y >= 2u && pixel_y <= 4u) || (pixel_y == 3u && pixel_x >= 1u && pixel_x <= 3u);
-        }
-        case 42u: { // '*'
-            return pixel_x == 2u && pixel_y == 3u || (pixel_x == 1u || pixel_x == 3u) && (pixel_y == 2u || pixel_y == 4u);
-        }
-        case 47u: { // '/'
-            return (pixel_x == 4u && pixel_y >= 4u) || (pixel_x == 3u && pixel_y == 3u) ||
-                   (pixel_x == 2u && pixel_y == 2u) || (pixel_x == 1u && pixel_y == 1u) || (pixel_x == 0u && pixel_y <= 1u);
-        }
-        case 92u: { // '\'
-            return (pixel_x == 0u && pixel_y >= 4u) || (pixel_x == 1u && pixel_y == 3u) ||
-                   (pixel_x == 2u && pixel_y == 2u) || (pixel_x == 3u && pixel_y == 1u) || (pixel_x == 4u && pixel_y <= 1u);
-        }
-        case 60u: { // '<'
-            return (pixel_x == 3u && (pixel_y == 1u || pixel_y == 5u)) || (pixel_x == 2u && (pixel_y == 2u || pixel_y == 4u)) ||
-                   (pixel_x == 1u && pixel_y == 3u);
-        }
-        case 62u: { // '>'
-            return (pixel_x == 1u && (pixel_y == 1u || pixel_y == 5u)) || (pixel_x == 2u && (pixel_y == 2u || pixel_y == 4u)) ||
-                   (pixel_x == 3u && pixel_y == 3u);
-        }
-        case 33u: { // '!'
-            return pixel_x == 2u && (pixel_y >= 2u || pixel_y == 0u);
-        }
-        case 63u: { // '?'
-            return (pixel_y == 6u && pixel_x >= 1u && pixel_x <= 3u) || (pixel_x == 4u && pixel_y >= 4u && pixel_y <= 5u) ||
-                   (pixel_y == 3u && pixel_x >= 2u && pixel_x <= 3u) || (pixel_x == 2u && pixel_y == 0u);
-        }
-        case 35u: { // '#'
-            return (pixel_x == 1u || pixel_x == 3u) || (pixel_y == 2u || pixel_y == 4u);
-        }
-        case 38u: { // '&'
-            return (pixel_y == 6u && pixel_x >= 1u && pixel_x <= 2u) || (pixel_x == 0u && (pixel_y == 5u || pixel_y == 3u || pixel_y == 1u)) ||
-                   (pixel_y == 2u && pixel_x == 1u) || (pixel_x == 3u && pixel_y <= 1u) || (pixel_y == 0u && pixel_x == 4u);
-        }
-        case 124u: { // '|'
-            return pixel_x == 2u;
-        }
-        
-        default: { // Fallback pattern for unimplemented characters
-            return (pixel_x == 0u || pixel_x == 4u || pixel_y == 0u || pixel_y == 6u) && 
-                   !((pixel_x == 0u || pixel_x == 4u) && (pixel_y == 0u || pixel_y == 6u));
-        }
-    }
-}
 
-// Render a single character using simple bitmap font
-fn render_character(char_code: u32, world_pos: float2, color: float4, screen_uv: float2, t: float) -> float4 {
-    let char_size = float2(0.020, 0.028); // 2x larger character size for readability
-    let char_uv = screen_uv - world_pos;
+// Sample text from glyphon texture (channel1)
+fn sample_text_texture(uv: float2) -> float4 {
+    let text_size = textureDimensions(channel1);
+    let texel_coord = uint2(uv * float2(text_size));
     
-    // Check if we're within character bounds
-    if (abs(char_uv.x) < char_size.x && abs(char_uv.y) < char_size.y) {
-        // Convert to pixel coordinates within 5x7 grid
-        let pixel_x = u32((char_uv.x + char_size.x) / (2.0 * char_size.x) * 5.0);
-        let pixel_y = u32((char_uv.y + char_size.y) / (2.0 * char_size.y) * 7.0);
-        
-        if (pixel_x < 5u && pixel_y < 7u && get_char_pattern(char_code, pixel_x, pixel_y)) {
-            return float4(color.rgb, 0.9); // Use actual syntax highlighting colors
+    // DEBUG: Show texture dimensions in top-right corner
+    if (uv.x > 0.8 && uv.y < 0.1) {
+        // Create a pattern based on texture dimensions to verify binding
+        let dim_pattern = f32(text_size.x % 16u) / 16.0;
+        return float4(0.0, dim_pattern, 1.0, 0.8); // Blue-green debug info
+    }
+    
+    // DEBUG: Sample specific known coordinates to test texture content
+    if (uv.x > 0.7 && uv.x < 0.8 && uv.y < 0.1) {
+        // Sample center of texture to see if there's any content
+        let center_sample = textureLoad(channel1, uint2(text_size.x / 2u, text_size.y / 2u), 0);
+        if (center_sample.a > 0.01) {
+            return float4(0.0, 1.0, 0.0, 0.8); // Green = texture has content
+        } else {
+            return float4(1.0, 1.0, 0.0, 0.8); // Yellow = texture is empty
         }
     }
     
-    return float4(0.0);
+    // Bounds check
+    if (texel_coord.x >= text_size.x || texel_coord.y >= text_size.y) {
+        return float4(0.0);
+    }
+    
+    return textureLoad(channel1, texel_coord, 0);
 }
 
 // Main text rendering function
 fn render_text_layer(uv: float2, t: float) -> float4 {
-    var text_color = float4(0.0);
+    // Sample text directly from glyphon texture in channel1
+    let text_sample = sample_text_texture(uv);
     
-    for (var i = 0u; i < CHAR_COUNT; i++) {
-        let char_pos = apply_3d_perspective(positions[i], uv, t);
-        let char_color = unpack_color(colors[i]);
-        text_color += render_character(chars[i], char_pos, char_color, uv, t);
+    // DEBUG: If no text, show a debug pattern in upper area to verify the code is running
+    if (text_sample.a < 0.01 && uv.y < 0.4 && uv.x < 0.5) {
+        // Show red debug pattern in upper-left where text should be
+        let debug_pattern = sin(uv.x * 50.0) * sin(uv.y * 50.0);
+        if (debug_pattern > 0.5) {
+            return float4(1.0, 0.0, 0.0, 0.5); // Red debug pattern
+        }
     }
     
-    return text_color;
+    return text_sample;
 }
 "#);
         
@@ -1227,5 +1070,129 @@ fn render_text_layer(uv: float2, t: float) -> float4 {
             positions,
             max_chars_per_line,
         })
+    }
+
+    /// Load FiraCode Nerd Font and generate texture atlas
+    async fn load_firacode_font_atlas(&self) -> Result<(Vec<u8>, Vec<(f32, f32, f32, f32)>), CodeSkewError> {
+        use glyphon::{Buffer, Metrics, Shaping, Wrap, SwashCache};
+        use cosmic_text;
+        
+        // Load FiraCode Nerd Font data using nerdfont system
+        let font_data = nerdfont::nerd_font_bytes("FiraCode").await
+            .map_err(|e| CodeSkewError::RenderingError(format!("Failed to load FiraCode font: {}", e)))?;
+
+        // Create font system with FiraCode
+        let mut font_system = create_font_system_with_nerd_font("FiraCode Nerd Font Mono").await
+            .map_err(|e| CodeSkewError::RenderingError(format!("Failed to create font system: {}", e)))?;
+
+        // Create swash cache for glyph rasterization
+        let mut swash_cache = SwashCache::new();
+
+        // Atlas parameters
+        const ATLAS_SIZE: u32 = 1024;
+        const FONT_SIZE: f32 = 64.0; // High quality for scaling
+        const GRID_SIZE: usize = 10; // 10x10 grid for 95 ASCII chars (32-126)
+        const CHAR_SIZE: u32 = ATLAS_SIZE / GRID_SIZE as u32;
+
+        // Create atlas texture data (R8 format for alpha)
+        let mut atlas_data = vec![0u8; (ATLAS_SIZE * ATLAS_SIZE) as usize];
+        let mut uv_coords = Vec::new();
+
+        // Generate each ASCII character (32-126)
+        for char_code in 32u8..=126u8 {
+            let ch = char_code as char;
+            let char_index = (char_code - 32) as usize;
+            
+            // Calculate grid position
+            let grid_x = char_index % GRID_SIZE;
+            let grid_y = char_index / GRID_SIZE;
+            
+            // Calculate UV coordinates for this character
+            let u0 = grid_x as f32 / GRID_SIZE as f32;
+            let v0 = grid_y as f32 / GRID_SIZE as f32;
+            let u1 = (grid_x + 1) as f32 / GRID_SIZE as f32;
+            let v1 = (grid_y + 1) as f32 / GRID_SIZE as f32;
+            uv_coords.push((u0, v0, u1, v1));
+
+            // Render character using glyphon's text rendering
+            let mut buffer = Buffer::new(&mut font_system, Metrics::new(FONT_SIZE, FONT_SIZE));
+            buffer.set_size(&mut font_system, Some(CHAR_SIZE as f32), Some(CHAR_SIZE as f32));
+            
+            // Set text with proper attributes
+            let attrs = glyphon::Attrs::new()
+                .family(glyphon::Family::Name("FiraCode Nerd Font Mono"))
+                .weight(glyphon::Weight::NORMAL)
+                .style(glyphon::Style::Normal);
+            buffer.set_text(&mut font_system, &ch.to_string(), &attrs, Shaping::Advanced);
+            buffer.set_wrap(&mut font_system, Wrap::None);
+            
+            // Calculate atlas position
+            let start_x = grid_x * (CHAR_SIZE as usize);
+            let start_y = grid_y * (CHAR_SIZE as usize);
+            
+            // Get glyph layout and rasterize
+            for run in buffer.layout_runs() {
+                for glyph in run.glyphs.iter() {
+                    // Create cache key for glyph using cosmic-text's cache key
+                    let cache_key = cosmic_text::CacheKey {
+                        font_id: glyph.font_id,
+                        glyph_id: glyph.glyph_id,
+                        font_size_bits: glyph.font_size.to_bits(),
+                        x_bin: cosmic_text::SubpixelBin::Zero,
+                        y_bin: cosmic_text::SubpixelBin::Zero,
+                        flags: cosmic_text::CacheKeyFlags::empty(),
+                    };
+                    
+                    // Get the actual glyph bitmap from swash cache
+                    if let Some(glyph_image) = swash_cache.get_image(&mut font_system, cache_key) {
+                        // Skip glyphs with zero width/height to prevent panic
+                        if glyph_image.placement.width == 0 || glyph_image.placement.height == 0 {
+                            continue;
+                        }
+                        
+                        // Center the glyph in the character cell
+                        let offset_x = ((CHAR_SIZE as i32 - glyph_image.placement.width as i32) / 2).max(0);
+                        let offset_y = ((CHAR_SIZE as i32 - glyph_image.placement.height as i32) / 2).max(0);
+                        
+                        // Copy glyph bitmap to atlas
+                        for (src_y, row) in glyph_image.data.chunks_exact(glyph_image.placement.width as usize).enumerate() {
+                            for (src_x, &pixel) in row.iter().enumerate() {
+                                let atlas_x = start_x + offset_x as usize + src_x;
+                                let atlas_y = start_y + offset_y as usize + src_y;
+                                
+                                if atlas_x < ATLAS_SIZE as usize && atlas_y < ATLAS_SIZE as usize {
+                                    let index = atlas_y * ATLAS_SIZE as usize + atlas_x;
+                                    atlas_data[index] = pixel;
+                                }
+                            }
+                        }
+                    } else {
+                        // Fallback: simple filled rectangle for missing glyphs
+                        let glyph_size = 48; // Approximate glyph size
+                        let offset_x = ((CHAR_SIZE as i32 - glyph_size) / 2).max(0);
+                        let offset_y = ((CHAR_SIZE as i32 - glyph_size) / 2).max(0);
+                        
+                        for y in 0..glyph_size {
+                            for x in 0..glyph_size {
+                                let atlas_x = start_x + offset_x as usize + x as usize;
+                                let atlas_y = start_y + offset_y as usize + y as usize;
+                                
+                                if atlas_x < ATLAS_SIZE as usize && atlas_y < ATLAS_SIZE as usize {
+                                    let index = atlas_y * ATLAS_SIZE as usize + atlas_x;
+                                    // Simple character pattern as fallback
+                                    if (x + y) % 8 < 4 {
+                                        atlas_data[index] = 128; // Gray fallback
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("🔤 Generated FiraCode font atlas: {}x{} with {} characters", ATLAS_SIZE, ATLAS_SIZE, uv_coords.len());
+        
+        Ok((atlas_data, uv_coords))
     }
 }
